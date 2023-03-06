@@ -372,17 +372,14 @@ func TestParse(t *testing.T) {
 								},
 								Templates: []*api.Template{
 									{
-										SourcePath:    stringToPtr("foo"),
-										DestPath:      stringToPtr("foo"),
-										ChangeMode:    stringToPtr("foo"),
-										ChangeSignal:  stringToPtr("foo"),
-										Splay:         timeToPtr(10 * time.Second),
-										Perms:         stringToPtr("0644"),
-										Envvars:       boolToPtr(true),
-										Uid:           intToPtr(-1),
-										Gid:           intToPtr(-1),
-										VaultGrace:    timeToPtr(33 * time.Second),
-										ErrMissingKey: boolToPtr(true),
+										SourcePath:   stringToPtr("foo"),
+										DestPath:     stringToPtr("foo"),
+										ChangeMode:   stringToPtr("foo"),
+										ChangeSignal: stringToPtr("foo"),
+										Splay:        timeToPtr(10 * time.Second),
+										Perms:        stringToPtr("0644"),
+										Envvars:      boolToPtr(true),
+										VaultGrace:   timeToPtr(33 * time.Second),
 									},
 									{
 										SourcePath: stringToPtr("bar"),
@@ -394,13 +391,12 @@ func TestParse(t *testing.T) {
 											Timeout:     timeToPtr(5 * time.Second),
 											FailOnError: boolToPtr(false),
 										},
-										Splay:         timeToPtr(5 * time.Second),
-										Perms:         stringToPtr("777"),
-										Uid:           intToPtr(1001),
-										Gid:           intToPtr(20),
-										LeftDelim:     stringToPtr("--"),
-										RightDelim:    stringToPtr("__"),
-										ErrMissingKey: boolToPtr(false),
+										Splay:      timeToPtr(5 * time.Second),
+										Perms:      stringToPtr("777"),
+										Uid:        intToPtr(1001),
+										Gid:        intToPtr(20),
+										LeftDelim:  stringToPtr("--"),
+										RightDelim: stringToPtr("__"),
 									},
 								},
 								Leader:     true,
@@ -882,28 +878,6 @@ func TestParse(t *testing.T) {
 			false,
 		},
 		{
-			"service-tagged-address.hcl",
-			&api.Job{
-				ID:   stringToPtr("service_tagged_address"),
-				Name: stringToPtr("service_tagged_address"),
-				Type: stringToPtr("service"),
-				TaskGroups: []*api.TaskGroup{
-					{
-						Name: stringToPtr("group"),
-						Services: []*api.Service{
-							{
-								Name: "service1",
-								TaggedAddresses: map[string]string{
-									"public_wan": "1.2.3.4",
-								},
-							},
-						},
-					},
-				},
-			},
-			false,
-		},
-		{
 			"service-check-driver-address.hcl",
 			&api.Job{
 				ID:   stringToPtr("address_mode_driver"),
@@ -1282,8 +1256,8 @@ func TestParse(t *testing.T) {
 						Connect: &api.ConsulConnect{
 							SidecarService: &api.ConsulSidecarService{
 								Proxy: &api.ConsulProxy{
-									Expose: &api.ConsulExposeConfig{
-										Paths: []*api.ConsulExposePath{{
+									ExposeConfig: &api.ConsulExposeConfig{
+										Path: []*api.ConsulExposePath{{
 											Path:          "/health",
 											Protocol:      "http",
 											LocalPathPort: 2222,
@@ -1386,8 +1360,8 @@ func TestParse(t *testing.T) {
 								Proxy: &api.ConsulProxy{
 									LocalServiceAddress: "10.0.1.2",
 									LocalServicePort:    8080,
-									Expose: &api.ConsulExposeConfig{
-										Paths: []*api.ConsulExposePath{{
+									ExposeConfig: &api.ConsulExposeConfig{
+										Path: []*api.ConsulExposePath{{
 											Path:          "/metrics",
 											Protocol:      "http",
 											LocalPathPort: 9001,

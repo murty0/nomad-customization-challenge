@@ -41,7 +41,6 @@ func InterpolateServices(taskEnv *TaskEnv, services []*structs.Service) []*struc
 		service.CanaryTags = taskEnv.ParseAndReplace(service.CanaryTags)
 		service.Meta = interpolateMapStringString(taskEnv, service.Meta)
 		service.CanaryMeta = interpolateMapStringString(taskEnv, service.CanaryMeta)
-		service.TaggedAddresses = interpolateMapStringString(taskEnv, service.TaggedAddresses)
 		interpolateConnect(taskEnv, service.Connect)
 
 		interpolated[i] = service
@@ -74,12 +73,12 @@ func interpolateMapStringString(taskEnv *TaskEnv, orig map[string]string) map[st
 	return m
 }
 
-func interpolateMapStringInterface(taskEnv *TaskEnv, orig map[string]any) map[string]any {
+func interpolateMapStringInterface(taskEnv *TaskEnv, orig map[string]interface{}) map[string]interface{} {
 	if len(orig) == 0 {
 		return nil
 	}
 
-	m := make(map[string]any, len(orig))
+	m := make(map[string]interface{}, len(orig))
 	for k, v := range orig {
 		envK := taskEnv.ReplaceEnv(k)
 		if vStr, ok := v.(string); ok {
@@ -155,7 +154,6 @@ func interpolateConnectSidecarService(taskEnv *TaskEnv, sidecar *structs.ConsulS
 			sidecar.Proxy.Upstreams[i].Datacenter = taskEnv.ReplaceEnv(sidecar.Proxy.Upstreams[i].Datacenter)
 			sidecar.Proxy.Upstreams[i].DestinationName = taskEnv.ReplaceEnv(sidecar.Proxy.Upstreams[i].DestinationName)
 			sidecar.Proxy.Upstreams[i].LocalBindAddress = taskEnv.ReplaceEnv(sidecar.Proxy.Upstreams[i].LocalBindAddress)
-			sidecar.Proxy.Upstreams[i].Config = interpolateMapStringInterface(taskEnv, sidecar.Proxy.Upstreams[i].Config)
 		}
 		sidecar.Proxy.Config = interpolateMapStringInterface(taskEnv, sidecar.Proxy.Config)
 	}

@@ -209,7 +209,7 @@ func TestHelpers_LineLimitReader_TimeLimit(t *testing.T) {
 }
 
 const (
-	job1 = `job "job1" {
+	job = `job "job1" {
   type        = "service"
   datacenters = ["dc1"]
   group "group1" {
@@ -263,7 +263,7 @@ func TestJobGetter_LocalFile(t *testing.T) {
 		t.Fatalf("err: %s", err)
 	}
 	defer os.Remove(fh.Name())
-	_, err = fh.WriteString(job1)
+	_, err = fh.WriteString(job)
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -332,6 +332,7 @@ func TestJobGetter_LocalFile_InvalidHCL2(t *testing.T) {
 // TestJobGetter_HCL2_Variables asserts variable arguments from CLI
 // and varfiles are both honored
 func TestJobGetter_HCL2_Variables(t *testing.T) {
+	ci.Parallel(t)
 
 	hcl := `
 variables {
@@ -345,6 +346,7 @@ job "example" {
   datacenters = ["${var.var1}", "${var.var2}", "${var.var3}", "${var.var4}"]
 }
 `
+
 	t.Setenv("NOMAD_VAR_var4", "from-envvar")
 
 	cliArgs := []string{`var2=from-cli`}
@@ -375,6 +377,7 @@ job "example" {
 }
 
 func TestJobGetter_HCL2_Variables_StrictFalse(t *testing.T) {
+	ci.Parallel(t)
 
 	hcl := `
 variables {
@@ -389,7 +392,8 @@ job "example" {
 }
 `
 
-	t.Setenv("NOMAD_VAR_var4", "from-envvar")
+	os.Setenv("NOMAD_VAR_var4", "from-envvar")
+	defer os.Unsetenv("NOMAD_VAR_var4")
 
 	// Both the CLI and var file contain variables that are not used with the
 	// template and therefore would error, if hcl2-strict was true.
@@ -427,7 +431,7 @@ unsedVar2 = "from-varfile"
 func TestJobGetter_HTTPServer(t *testing.T) {
 	ci.Parallel(t)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, job1)
+		fmt.Fprintf(w, job)
 	})
 	go http.ListenAndServe("127.0.0.1:12345", nil)
 

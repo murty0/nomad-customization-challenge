@@ -72,12 +72,11 @@ export default class KeyboardService extends Service {
   defaultPatterns = {
     'Go to Jobs': ['g', 'j'],
     'Go to Storage': ['g', 'r'],
-    'Go to Variables': ['g', 'v'],
     'Go to Servers': ['g', 's'],
     'Go to Clients': ['g', 'c'],
     'Go to Topology': ['g', 't'],
     'Go to Evaluations': ['g', 'e'],
-    'Go to Profile': ['g', 'p'],
+    'Go to ACL Tokens': ['g', 'a'],
     'Next Subnav': ['Shift+ArrowRight'],
     'Previous Subnav': ['Shift+ArrowLeft'],
     'Previous Main Section': ['Shift+ArrowUp'],
@@ -102,10 +101,6 @@ export default class KeyboardService extends Service {
         rebindable: true,
       },
       {
-        label: 'Go to Variables',
-        action: () => this.router.transitionTo('variables'),
-      },
-      {
         label: 'Go to Servers',
         action: () => this.router.transitionTo('servers'),
         rebindable: true,
@@ -126,7 +121,7 @@ export default class KeyboardService extends Service {
         rebindable: true,
       },
       {
-        label: 'Go to Profile',
+        label: 'Go to ACL Tokens',
         action: () => this.router.transitionTo('settings.tokens'),
         rebindable: true,
       },

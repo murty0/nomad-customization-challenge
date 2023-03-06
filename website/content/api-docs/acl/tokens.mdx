@@ -11,9 +11,15 @@ For more details about ACLs, please see the [ACL Guide](/nomad/tutorials/access-
 
 ## Bootstrap Token
 
+<<<<<<< HEAD:website/content/api-docs/acl-tokens.mdx
+This endpoint is used to bootstrap the ACL system and provide the initial management token. 
+An operator created token can be provided in the body of the request to bootstrap the cluster 
+if required. If no header is provided the cluster will return a generated management token. 
+=======
 This endpoint is used to bootstrap the ACL system and provide the initial management token.
 An operator created token can be provided in the body of the request to bootstrap the cluster
 if required. If no header is provided the cluster will return a generated management token.
+>>>>>>> main:website/content/api-docs/acl/tokens.mdx
 The provided token should be presented in a UUID format.
 This request is always forwarded to the authoritative region. It can only be invoked once
 until a [bootstrap reset](/nomad/tutorials/access-control/access-control-bootstrap#re-bootstrap-acl-system) is performed.

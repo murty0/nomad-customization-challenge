@@ -87,7 +87,7 @@ const (
 
 // Additional Consul ACLs required
 // - Consul Template: key:read
-//   Used in tasks with template block that use Consul keys.
+//   Used in tasks with template stanza that use Consul keys.
 
 // CatalogAPI is the consul/api.Catalog API used by Nomad.
 //
@@ -113,16 +113,14 @@ type NamespaceAPI interface {
 // - agent:read
 // - service:write
 type AgentAPI interface {
+	ServicesWithFilterOpts(filter string, q *api.QueryOptions) (map[string]*api.AgentService, error)
+	ChecksWithFilterOpts(filter string, q *api.QueryOptions) (map[string]*api.AgentCheck, error)
 	CheckRegister(check *api.AgentCheckRegistration) error
 	CheckDeregisterOpts(checkID string, q *api.QueryOptions) error
-	ChecksWithFilterOpts(filter string, q *api.QueryOptions) (map[string]*api.AgentCheck, error)
-	UpdateTTLOpts(id, output, status string, q *api.QueryOptions) error
-
+	Self() (map[string]map[string]interface{}, error)
 	ServiceRegister(service *api.AgentServiceRegistration) error
 	ServiceDeregisterOpts(serviceID string, q *api.QueryOptions) error
-	ServicesWithFilterOpts(filter string, q *api.QueryOptions) (map[string]*api.AgentService, error)
-
-	Self() (map[string]map[string]interface{}, error)
+	UpdateTTLOpts(id, output, status string, q *api.QueryOptions) error
 }
 
 // ConfigAPI is the consul/api.ConfigEntries API subset used by Nomad Server.
@@ -160,7 +158,7 @@ type ACLsAPI interface {
 //	sidecar - Consul's view (agent, not catalog) of the service definition of the sidecar
 //	         associated with existing that may or may not exist.
 //	         May be nil.
-func (s *ServiceClient) agentServiceUpdateRequired(reason syncReason, wanted *api.AgentServiceRegistration, existing *api.AgentService, sidecar *api.AgentService) bool {
+func agentServiceUpdateRequired(reason syncReason, wanted *api.AgentServiceRegistration, existing *api.AgentService, sidecar *api.AgentService) bool {
 	switch reason {
 	case syncPeriodic:
 		// In a periodic sync with Consul, we need to respect the value of
@@ -180,7 +178,7 @@ func (s *ServiceClient) agentServiceUpdateRequired(reason syncReason, wanted *ap
 		maybeTweakTaggedAddresses(wanted, existing)
 
 		// Okay now it is safe to compare.
-		return s.different(wanted, existing, sidecar)
+		return different(wanted, existing, sidecar)
 
 	default:
 		// A non-periodic sync with Consul indicates an operation has been set
@@ -192,7 +190,7 @@ func (s *ServiceClient) agentServiceUpdateRequired(reason syncReason, wanted *ap
 		maybeTweakTaggedAddresses(wanted, existing)
 
 		// Okay now it is safe to compare.
-		return s.different(wanted, existing, sidecar)
+		return different(wanted, existing, sidecar)
 	}
 }
 
@@ -225,57 +223,49 @@ func maybeTweakTaggedAddresses(wanted *api.AgentServiceRegistration, existing *a
 		if _, exists := wanted.TaggedAddresses["wan_ipv4"]; !exists {
 			delete(existing.TaggedAddresses, "wan_ipv4")
 		}
-		if _, exists := wanted.TaggedAddresses["lan_ipv6"]; !exists {
-			delete(existing.TaggedAddresses, "lan_ipv6")
-		}
-		if _, exists := wanted.TaggedAddresses["wan_ipv6"]; !exists {
-			delete(existing.TaggedAddresses, "wan_ipv6")
-		}
 	}
 }
 
 // different compares the wanted state of the service registration with the actual
 // (cached) state of the service registration reported by Consul. If any of the
 // critical fields are not deeply equal, they considered different.
-func (s *ServiceClient) different(wanted *api.AgentServiceRegistration, existing *api.AgentService, sidecar *api.AgentService) bool {
-	trace := func(field string, left, right any) {
-		s.logger.Trace("registrations different", "id", wanted.ID,
-			"field", field, "wanted", fmt.Sprintf("%#v", left), "existing", fmt.Sprintf("%#v", right),
-		)
-	}
-
+func different(wanted *api.AgentServiceRegistration, existing *api.AgentService, sidecar *api.AgentService) bool {
 	switch {
 	case wanted.Kind != existing.Kind:
-		trace("kind", wanted.Kind, existing.Kind)
 		return true
 	case wanted.ID != existing.ID:
-		trace("id", wanted.ID, existing.ID)
 		return true
 	case wanted.Port != existing.Port:
-		trace("port", wanted.Port, existing.Port)
 		return true
 	case wanted.Address != existing.Address:
-		trace("address", wanted.Address, existing.Address)
 		return true
 	case wanted.Name != existing.Service:
-		trace("service name", wanted.Name, existing.Service)
 		return true
 	case wanted.EnableTagOverride != existing.EnableTagOverride:
-		trace("enable_tag_override", wanted.EnableTagOverride, existing.EnableTagOverride)
 		return true
 	case !maps.Equal(wanted.Meta, existing.Meta):
-		trace("meta", wanted.Meta, existing.Meta)
 		return true
 	case !maps.Equal(wanted.TaggedAddresses, existing.TaggedAddresses):
-		trace("tagged_addresses", wanted.TaggedAddresses, existing.TaggedAddresses)
 		return true
 	case !helper.SliceSetEq(wanted.Tags, existing.Tags):
-		trace("tags", wanted.Tags, existing.Tags)
 		return true
 	case connectSidecarDifferent(wanted, sidecar):
-		trace("connect_sidecar", wanted.Name, existing.Service)
 		return true
 	}
+	return false
+}
+
+func tagsDifferent(a, b []string) bool {
+	if len(a) != len(b) {
+		return true
+	}
+
+	for i, valueA := range a {
+		if b[i] != valueA {
+			return true
+		}
+	}
+
 	return false
 }
 
@@ -286,9 +276,9 @@ func (s *ServiceClient) different(wanted *api.AgentServiceRegistration, existing
 // comparing them to the parent service tags.
 func sidecarTagsDifferent(parent, wanted, sidecar []string) bool {
 	if len(wanted) == 0 {
-		return !helper.SliceSetEq(parent, sidecar)
+		return tagsDifferent(parent, sidecar)
 	}
-	return !helper.SliceSetEq(wanted, sidecar)
+	return tagsDifferent(wanted, sidecar)
 }
 
 // proxyUpstreamsDifferent determines if the sidecar_service.proxy.upstreams
@@ -408,7 +398,7 @@ func (o *operations) empty() bool {
 	}
 }
 
-func (o *operations) String() string {
+func (o operations) String() string {
 	return fmt.Sprintf("<%d, %d, %d, %d>", len(o.regServices), len(o.regChecks), len(o.deregServices), len(o.deregChecks))
 }
 
@@ -461,38 +451,11 @@ type ServiceClient struct {
 	deregisterProbationExpiry time.Time
 
 	// checkWatcher restarts checks that are unhealthy.
-	checkWatcher *serviceregistration.UniversalCheckWatcher
+	checkWatcher *checkWatcher
 
 	// isClientAgent specifies whether this Consul client is being used
 	// by a Nomad client.
 	isClientAgent bool
-}
-
-// checkStatusGetter is the consul-specific implementation of serviceregistration.CheckStatusGetter
-type checkStatusGetter struct {
-	agentAPI         AgentAPI
-	namespacesClient *NamespacesClient
-}
-
-func (csg *checkStatusGetter) Get() (map[string]string, error) {
-	// Get the list of all namespaces so we can iterate them.
-	namespaces, err := csg.namespacesClient.List()
-	if err != nil {
-		return nil, err
-	}
-
-	results := make(map[string]string)
-	for _, namespace := range namespaces {
-		resultsInNamespace, err := csg.agentAPI.ChecksWithFilterOpts("", &api.QueryOptions{Namespace: normalizeNamespace(namespace)})
-		if err != nil {
-			return nil, err
-		}
-
-		for k, v := range resultsInNamespace {
-			results[k] = v.Status
-		}
-	}
-	return results, nil
 }
 
 // NewServiceClient creates a new Consul ServiceClient from an existing Consul API
@@ -517,14 +480,11 @@ func NewServiceClient(agentAPI AgentAPI, namespacesClient *NamespacesClient, log
 		explicitlyDeregisteredServices: set.New[string](0),
 		explicitlyDeregisteredChecks:   set.New[string](0),
 		allocRegistrations:             make(map[string]*serviceregistration.AllocRegistration),
+		checkWatcher:                   newCheckWatcher(logger, agentAPI, namespacesClient),
 		agentServices:                  set.New[string](4),
 		agentChecks:                    set.New[string](0),
 		isClientAgent:                  isNomadClient,
 		deregisterProbationExpiry:      time.Now().Add(deregisterProbationPeriod),
-		checkWatcher: serviceregistration.NewCheckWatcher(logger, &checkStatusGetter{
-			agentAPI:         agentAPI,
-			namespacesClient: namespacesClient,
-		}),
 	}
 }
 
@@ -825,8 +785,7 @@ func (c *ServiceClient) sync(reason syncReason) error {
 		serviceInConsul, exists := servicesInConsul[id]
 		sidecarInConsul := getNomadSidecar(id, servicesInConsul)
 
-		if !exists || c.agentServiceUpdateRequired(reason, serviceInNomad, serviceInConsul, sidecarInConsul) {
-			c.logger.Trace("must register service", "id", id, "exists", exists, "reason", reason)
+		if !exists || agentServiceUpdateRequired(reason, serviceInNomad, serviceInConsul, sidecarInConsul) {
 			if err = c.agentAPI.ServiceRegister(serviceInNomad); err != nil {
 				metrics.IncrCounter([]string{"client", "consul", "sync_failure"}, 1)
 				return err
@@ -1009,7 +968,7 @@ func (c *ServiceClient) serviceRegs(
 ) (*serviceregistration.ServiceRegistration, error) {
 
 	// Get the services ID
-	id := serviceregistration.MakeAllocServiceID(workload.AllocInfo.AllocID, workload.Name(), service)
+	id := serviceregistration.MakeAllocServiceID(workload.AllocID, workload.Name(), service)
 	sreg := &serviceregistration.ServiceRegistration{
 		ServiceID:     id,
 		CheckIDs:      make(map[string]struct{}, len(service.Checks)),
@@ -1040,7 +999,7 @@ func (c *ServiceClient) serviceRegs(
 	}
 
 	// newConnect returns (nil, nil) if there's no Connect-enabled service.
-	connect, err := newConnect(id, workload.AllocInfo, service.Name, service.Connect, workload.Networks, workload.Ports)
+	connect, err := newConnect(id, workload.AllocID, service.Name, service.Connect, workload.Networks, workload.Ports)
 	if err != nil {
 		return nil, fmt.Errorf("invalid Consul Connect configuration for service %q: %v", service.Name, err)
 	}
@@ -1103,25 +1062,19 @@ func (c *ServiceClient) serviceRegs(
 		}
 	}
 
-	taggedAddresses, err := parseTaggedAddresses(service.TaggedAddresses, port)
-	if err != nil {
-		return nil, err
-	}
-
 	// Build the Consul Service registration request
 	serviceReg := &api.AgentServiceRegistration{
 		Kind:              kind,
 		ID:                id,
 		Name:              service.Name,
-		Namespace:         workload.ProviderNamespace,
+		Namespace:         workload.Namespace,
 		Tags:              tags,
 		EnableTagOverride: service.EnableTagOverride,
 		Address:           ip,
 		Port:              port,
 		Meta:              meta,
-		TaggedAddresses:   taggedAddresses,
-		Connect:           connect, // will be nil if no Connect block
-		Proxy:             gateway, // will be nil if no Connect Gateway block
+		Connect:           connect, // will be nil if no Connect stanza
+		Proxy:             gateway, // will be nil if no Connect Gateway stanza
 		Checks:            make([]*api.AgentServiceCheck, 0, len(service.Checks)),
 	}
 	ops.regServices = append(ops.regServices, serviceReg)
@@ -1209,7 +1162,7 @@ func (c *ServiceClient) checkRegs(
 		}
 
 		checkID := MakeCheckID(serviceID, check)
-		registration, err := createCheckReg(serviceID, checkID, check, ip, port, workload.ProviderNamespace)
+		registration, err := createCheckReg(serviceID, checkID, check, ip, port, workload.Namespace)
 		if err != nil {
 			return nil, fmt.Errorf("failed to add check %q: %v", check.Name, err)
 		}
@@ -1246,18 +1199,18 @@ func (c *ServiceClient) RegisterWorkload(workload *serviceregistration.WorkloadS
 	}
 
 	// Add the workload to the allocation's registration
-	c.addRegistrations(workload.AllocInfo.AllocID, workload.Name(), t)
+	c.addRegistrations(workload.AllocID, workload.Name(), t)
 
 	c.commit(ops)
 
 	// Start watching checks. Done after service registrations are built
 	// since an error building them could leak watches.
 	for _, service := range workload.Services {
-		serviceID := serviceregistration.MakeAllocServiceID(workload.AllocInfo.AllocID, workload.Name(), service)
+		serviceID := serviceregistration.MakeAllocServiceID(workload.AllocID, workload.Name(), service)
 		for _, check := range service.Checks {
 			if check.TriggersRestarts() {
 				checkID := MakeCheckID(serviceID, check)
-				c.checkWatcher.Watch(workload.AllocInfo.AllocID, workload.Name(), checkID, check, workload.Restarter)
+				c.checkWatcher.Watch(workload.AllocID, workload.Name(), checkID, check, workload.Restarter)
 			}
 		}
 	}
@@ -1275,12 +1228,12 @@ func (c *ServiceClient) UpdateWorkload(old, newWorkload *serviceregistration.Wor
 
 	newIDs := make(map[string]*structs.Service, len(newWorkload.Services))
 	for _, s := range newWorkload.Services {
-		newIDs[serviceregistration.MakeAllocServiceID(newWorkload.AllocInfo.AllocID, newWorkload.Name(), s)] = s
+		newIDs[serviceregistration.MakeAllocServiceID(newWorkload.AllocID, newWorkload.Name(), s)] = s
 	}
 
 	// Loop over existing Services to see if they have been removed
 	for _, existingSvc := range old.Services {
-		existingID := serviceregistration.MakeAllocServiceID(old.AllocInfo.AllocID, old.Name(), existingSvc)
+		existingID := serviceregistration.MakeAllocServiceID(old.AllocID, old.Name(), existingSvc)
 		newSvc, ok := newIDs[existingID]
 
 		if !ok {
@@ -1298,8 +1251,8 @@ func (c *ServiceClient) UpdateWorkload(old, newWorkload *serviceregistration.Wor
 			continue
 		}
 
-		oldHash := existingSvc.Hash(old.AllocInfo.AllocID, old.Name(), old.Canary)
-		newHash := newSvc.Hash(newWorkload.AllocInfo.AllocID, newWorkload.Name(), newWorkload.Canary)
+		oldHash := existingSvc.Hash(old.AllocID, old.Name(), old.Canary)
+		newHash := newSvc.Hash(newWorkload.AllocID, newWorkload.Name(), newWorkload.Canary)
 		if oldHash == newHash {
 			// Service exists and hasn't changed, don't re-add it later
 			delete(newIDs, existingID)
@@ -1344,7 +1297,7 @@ func (c *ServiceClient) UpdateWorkload(old, newWorkload *serviceregistration.Wor
 
 			// Update all watched checks as CheckRestart fields aren't part of ID
 			if check.TriggersRestarts() {
-				c.checkWatcher.Watch(newWorkload.AllocInfo.AllocID, newWorkload.Name(), checkID, check, newWorkload.Restarter)
+				c.checkWatcher.Watch(newWorkload.AllocID, newWorkload.Name(), checkID, check, newWorkload.Restarter)
 			}
 		}
 
@@ -1370,7 +1323,7 @@ func (c *ServiceClient) UpdateWorkload(old, newWorkload *serviceregistration.Wor
 	}
 
 	// Add the task to the allocation's registration
-	c.addRegistrations(newWorkload.AllocInfo.AllocID, newWorkload.Name(), regs)
+	c.addRegistrations(newWorkload.AllocID, newWorkload.Name(), regs)
 
 	c.commit(ops)
 
@@ -1380,7 +1333,7 @@ func (c *ServiceClient) UpdateWorkload(old, newWorkload *serviceregistration.Wor
 		for _, check := range service.Checks {
 			if check.TriggersRestarts() {
 				checkID := MakeCheckID(serviceID, check)
-				c.checkWatcher.Watch(newWorkload.AllocInfo.AllocID, newWorkload.Name(), checkID, check, newWorkload.Restarter)
+				c.checkWatcher.Watch(newWorkload.AllocID, newWorkload.Name(), checkID, check, newWorkload.Restarter)
 			}
 		}
 	}
@@ -1395,7 +1348,7 @@ func (c *ServiceClient) RemoveWorkload(workload *serviceregistration.WorkloadSer
 	ops := operations{}
 
 	for _, service := range workload.Services {
-		id := serviceregistration.MakeAllocServiceID(workload.AllocInfo.AllocID, workload.Name(), service)
+		id := serviceregistration.MakeAllocServiceID(workload.AllocID, workload.Name(), service)
 		ops.deregServices = append(ops.deregServices, id)
 
 		for _, check := range service.Checks {
@@ -1409,7 +1362,7 @@ func (c *ServiceClient) RemoveWorkload(workload *serviceregistration.WorkloadSer
 	}
 
 	// Remove the workload from the alloc's registrations
-	c.removeRegistration(workload.AllocInfo.AllocID, workload.Name())
+	c.removeRegistration(workload.AllocID, workload.Name())
 
 	// Now add them to the deregistration fields; main Run loop will update
 	c.commit(&ops)
@@ -1791,45 +1744,4 @@ func getNomadSidecar(id string, services map[string]*api.AgentService) *api.Agen
 
 	sidecarID := id + sidecarSuffix
 	return services[sidecarID]
-}
-
-func parseAddress(raw string, port int) (api.ServiceAddress, error) {
-	result := api.ServiceAddress{}
-	addr, portStr, err := net.SplitHostPort(raw)
-	// Error message from Go's net/ipsock.go
-	if err != nil {
-		if !strings.Contains(err.Error(), "missing port in address") {
-			return result, fmt.Errorf("error parsing address %q: %v", raw, err)
-		}
-
-		// Use the whole input as the address if there wasn't a port.
-		if ip := net.ParseIP(raw); ip == nil {
-			return result, fmt.Errorf("error parsing address %q: not an IP address", raw)
-		}
-		addr = raw
-	}
-
-	if portStr != "" {
-		port, err = strconv.Atoi(portStr)
-		if err != nil {
-			return result, fmt.Errorf("error parsing port %q: %v", portStr, err)
-		}
-	}
-
-	result.Address = addr
-	result.Port = port
-	return result, nil
-}
-
-// morph the tagged_addresses map into the structure consul api wants
-func parseTaggedAddresses(m map[string]string, port int) (map[string]api.ServiceAddress, error) {
-	result := make(map[string]api.ServiceAddress, len(m))
-	for k, v := range m {
-		sa, err := parseAddress(v, port)
-		if err != nil {
-			return nil, err
-		}
-		result[k] = sa
-	}
-	return result, nil
 }

@@ -16,17 +16,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
 	"time"
 
-	"github.com/hashicorp/go-cleanhttp"
+	cleanhttp "github.com/hashicorp/go-cleanhttp"
 	"github.com/hashicorp/nomad/api/internal/testutil/discover"
+	"github.com/hashicorp/nomad/api/internal/testutil/freeport"
 	testing "github.com/mitchellh/go-testing-interface"
-	"github.com/shoenig/test/must"
-	"github.com/shoenig/test/portal"
-	"github.com/shoenig/test/wait"
 )
 
 // TestServerConfig is the main server configuration struct.
@@ -101,13 +100,12 @@ type Telemetry struct {
 // passed to NewTestServerConfig to modify the server config.
 type ServerConfigCallback func(c *TestServerConfig)
 
-// defaultServerConfig returns a new TestServerConfig struct pre-populated with
-// usable config for running as server.
+// defaultServerConfig returns a new TestServerConfig struct
+// with all of the listen ports incremented by one.
 func defaultServerConfig(t testing.T) *TestServerConfig {
-	grabber := portal.New(t)
-	ports := grabber.Grab(3)
+	ports := freeport.GetT(t, 3)
 
-	logLevel := "ERROR"
+	logLevel := "DEBUG"
 	if envLogLevel := os.Getenv("NOMAD_TEST_LOG_LEVEL"); envLogLevel != "" {
 		logLevel = envLogLevel
 	}
@@ -157,14 +155,24 @@ func NewTestServer(t testing.T, cb ServerConfigCallback) *TestServer {
 	}
 
 	// Check that we are actually running nomad
-	_, err = exec.Command(path, "-version").CombinedOutput()
-	must.NoError(t, err)
+	vcmd := exec.Command(path, "-version")
+	vcmd.Stdout = nil
+	vcmd.Stderr = nil
+	if err := vcmd.Run(); err != nil {
+		t.Skipf("nomad version failed: %v", err)
+	}
 
-	dataDir, err := os.MkdirTemp("", "nomad")
-	must.NoError(t, err)
+	dataDir, err := ioutil.TempDir("", "nomad")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 
-	configFile, err := os.CreateTemp(dataDir, "nomad")
-	must.NoError(t, err)
+	configFile, err := ioutil.TempFile(dataDir, "nomad")
+	if err != nil {
+		defer os.RemoveAll(dataDir)
+		t.Fatalf("err: %s", err)
+	}
+	defer configFile.Close()
 
 	nomadConfig := defaultServerConfig(t)
 	nomadConfig.DataDir = dataDir
@@ -181,17 +189,14 @@ func NewTestServer(t testing.T, cb ServerConfigCallback) *TestServer {
 	}
 
 	configContent, err := json.Marshal(nomadConfig)
-	must.NoError(t, err)
-
-	_, err = configFile.Write(configContent)
-	must.NoError(t, err)
-	must.NoError(t, configFile.Sync())
-	must.NoError(t, configFile.Close())
-
-	args := []string{"agent", "-config", configFile.Name()}
-	if nomadConfig.DevMode {
-		args = append(args, "-dev")
+	if err != nil {
+		t.Fatalf("err: %s", err)
 	}
+
+	if _, err := configFile.Write(configContent); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	configFile.Close()
 
 	stdout := io.Writer(os.Stdout)
 	if nomadConfig.Stdout != nil {
@@ -203,14 +208,20 @@ func NewTestServer(t testing.T, cb ServerConfigCallback) *TestServer {
 		stderr = nomadConfig.Stderr
 	}
 
+	args := []string{"agent", "-config", configFile.Name()}
+	if nomadConfig.DevMode {
+		args = append(args, "-dev")
+	}
+
 	// Start the server
 	cmd := exec.Command(path, args...)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	must.NoError(t, cmd.Start())
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("err: %s", err)
+	}
 
 	client := cleanhttp.DefaultClient()
-	client.Timeout = 10 * time.Second
 
 	server := &TestServer{
 		Config: nomadConfig,
@@ -239,19 +250,21 @@ func NewTestServer(t testing.T, cb ServerConfigCallback) *TestServer {
 // Stop stops the test Nomad server, and removes the Nomad data
 // directory once we are done.
 func (s *TestServer) Stop() {
-	defer func() { _ = os.RemoveAll(s.Config.DataDir) }()
+	defer os.RemoveAll(s.Config.DataDir)
 
 	// wait for the process to exit to be sure that the data dir can be
 	// deleted on all platforms.
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = s.cmd.Wait()
+
+		s.cmd.Wait()
 	}()
 
 	// kill and wait gracefully
-	err := s.cmd.Process.Signal(os.Interrupt)
-	must.NoError(s.t, err)
+	if err := s.cmd.Process.Signal(os.Interrupt); err != nil {
+		s.t.Errorf("err: %s", err)
+	}
 
 	select {
 	case <-done:
@@ -260,9 +273,9 @@ func (s *TestServer) Stop() {
 		s.t.Logf("timed out waiting for process to gracefully terminate")
 	}
 
-	err = s.cmd.Process.Kill()
-	must.NoError(s.t, err, must.Sprint("failed to kill process"))
-
+	if err := s.cmd.Process.Kill(); err != nil {
+		s.t.Errorf("err: %s", err)
+	}
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -274,52 +287,44 @@ func (s *TestServer) Stop() {
 // responding. This is an indication that the agent has started,
 // but will likely return before a leader is elected.
 func (s *TestServer) waitForAPI() {
-	f := func() error {
+	WaitForResult(func() (bool, error) {
+		// Using this endpoint as it is does not have restricted access
 		resp, err := s.HTTPClient.Get(s.url("/v1/metrics"))
 		if err != nil {
-			return fmt.Errorf("failed to get metrics: %w", err)
+			return false, err
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if err = s.requireOK(resp); err != nil {
-			return fmt.Errorf("metrics response is not ok: %w", err)
+		defer resp.Body.Close()
+		if err := s.requireOK(resp); err != nil {
+			return false, err
 		}
-		return nil
-	}
-	must.Wait(s.t,
-		wait.InitialSuccess(
-			wait.ErrorFunc(f),
-			wait.Timeout(10*time.Second),
-			wait.Gap(1*time.Second),
-		),
-		must.Sprint("failed to wait for api"),
-	)
+		return true, nil
+	}, func(err error) {
+		defer s.Stop()
+		s.t.Fatalf("err: %s", err)
+	})
 }
 
 // waitForLeader waits for the Nomad server's HTTP API to become
 // available, and then waits for a known leader and an index of
 // 1 or more to be observed to confirm leader election is done.
 func (s *TestServer) waitForLeader() {
-	f := func() error {
+	WaitForResult(func() (bool, error) {
 		// Query the API and check the status code
 		// Using this endpoint as it is does not have restricted access
 		resp, err := s.HTTPClient.Get(s.url("/v1/status/leader"))
 		if err != nil {
-			return fmt.Errorf("failed to get leader: %w", err)
+			return false, err
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if err = s.requireOK(resp); err != nil {
-			return fmt.Errorf("leader response is not ok: %w", err)
+		defer resp.Body.Close()
+		if err := s.requireOK(resp); err != nil {
+			return false, err
 		}
-		return nil
-	}
-	must.Wait(s.t,
-		wait.InitialSuccess(
-			wait.ErrorFunc(f),
-			wait.Timeout(10*time.Second),
-			wait.Gap(1*time.Second),
-		),
-		must.Sprint("failed to wait for leader"),
-	)
+
+		return true, nil
+	}, func(err error) {
+		defer s.Stop()
+		s.t.Fatalf("err: %s", err)
+	})
 }
 
 // waitForClient waits for the Nomad client to be ready. The function returns
@@ -328,32 +333,36 @@ func (s *TestServer) waitForClient() {
 	if !s.Config.DevMode {
 		return
 	}
-	f := func() error {
+
+	WaitForResult(func() (bool, error) {
 		resp, err := s.HTTPClient.Get(s.url("/v1/nodes"))
 		if err != nil {
-			return fmt.Errorf("failed to get nodes: %w", err)
+			return false, err
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if err = s.requireOK(resp); err != nil {
-			return fmt.Errorf("nodes response not ok: %w", err)
+		defer resp.Body.Close()
+		if err := s.requireOK(resp); err != nil {
+			return false, err
 		}
+
 		var decoded []struct {
 			ID     string
 			Status string
 		}
-		if err = json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-			return fmt.Errorf("failed to decode nodes response: %w", err)
+
+		dec := json.NewDecoder(resp.Body)
+		if err := dec.Decode(&decoded); err != nil {
+			return false, err
 		}
-		return nil
-	}
-	must.Wait(s.t,
-		wait.InitialSuccess(
-			wait.ErrorFunc(f),
-			wait.Timeout(10*time.Second),
-			wait.Gap(1*time.Second),
-		),
-		must.Sprint("failed to wait for client (node)"),
-	)
+
+		if len(decoded) != 1 || decoded[0].Status != "ready" {
+			return false, fmt.Errorf("Node not ready: %v", decoded)
+		}
+
+		return true, nil
+	}, func(err error) {
+		defer s.Stop()
+		s.t.Fatalf("err: %s", err)
+	})
 }
 
 // url is a helper function which takes a relative URL and
@@ -365,7 +374,7 @@ func (s *TestServer) url(path string) string {
 // requireOK checks the HTTP response code and ensures it is acceptable.
 func (s *TestServer) requireOK(resp *http.Response) error {
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("bad status code: %d", resp.StatusCode)
+		return fmt.Errorf("Bad status code: %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -373,14 +382,16 @@ func (s *TestServer) requireOK(resp *http.Response) error {
 // put performs a new HTTP PUT request.
 func (s *TestServer) put(path string, body io.Reader) *http.Response {
 	req, err := http.NewRequest("PUT", s.url(path), body)
-	must.NoError(s.t, err)
-
+	if err != nil {
+		s.t.Fatalf("err: %s", err)
+	}
 	resp, err := s.HTTPClient.Do(req)
-	must.NoError(s.t, err)
-
-	if err = s.requireOK(resp); err != nil {
-		_ = resp.Body.Close()
-		must.NoError(s.t, err)
+	if err != nil {
+		s.t.Fatalf("err: %s", err)
+	}
+	if err := s.requireOK(resp); err != nil {
+		defer resp.Body.Close()
+		s.t.Fatal(err)
 	}
 	return resp
 }
@@ -388,20 +399,23 @@ func (s *TestServer) put(path string, body io.Reader) *http.Response {
 // get performs a new HTTP GET request.
 func (s *TestServer) get(path string) *http.Response {
 	resp, err := s.HTTPClient.Get(s.url(path))
-	must.NoError(s.t, err)
-
-	if err = s.requireOK(resp); err != nil {
-		_ = resp.Body.Close()
-		must.NoError(s.t, err)
+	if err != nil {
+		s.t.Fatalf("err: %s", err)
+	}
+	if err := s.requireOK(resp); err != nil {
+		defer resp.Body.Close()
+		s.t.Fatal(err)
 	}
 	return resp
 }
 
 // encodePayload returns a new io.Reader wrapping the encoded contents
 // of the payload, suitable for passing directly to a new request.
-func (s *TestServer) encodePayload(payload any) io.Reader {
+func (s *TestServer) encodePayload(payload interface{}) io.Reader {
 	var encoded bytes.Buffer
-	err := json.NewEncoder(&encoded).Encode(payload)
-	must.NoError(s.t, err)
+	enc := json.NewEncoder(&encoded)
+	if err := enc.Encode(payload); err != nil {
+		s.t.Fatalf("err: %s", err)
+	}
 	return &encoded
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	client "github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/testutil"
+	"github.com/hashicorp/nomad/helper/freeport"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
@@ -140,7 +141,6 @@ func TestConfig_Merge(t *testing.T) {
 			RaftMultiplier:         pointer.Of(5),
 			NumSchedulers:          pointer.Of(1),
 			NodeGCThreshold:        "1h",
-			BatchEvalGCThreshold:   "4h",
 			HeartbeatGrace:         30 * time.Second,
 			MinHeartbeatTTL:        30 * time.Second,
 			MaxHeartbeatsPerSecond: 30.0,
@@ -155,13 +155,10 @@ func TestConfig_Merge(t *testing.T) {
 			},
 		},
 		ACL: &ACLConfig{
-			Enabled:               true,
-			TokenTTL:              60 * time.Second,
-			PolicyTTL:             60 * time.Second,
-			RoleTTL:               60 * time.Second,
-			TokenMinExpirationTTL: 60 * time.Second,
-			TokenMaxExpirationTTL: 60 * time.Second,
-			ReplicationToken:      "foo",
+			Enabled:          true,
+			TokenTTL:         60 * time.Second,
+			PolicyTTL:        60 * time.Second,
+			ReplicationToken: "foo",
 		},
 		Ports: &Ports{
 			HTTP: 4646,
@@ -287,7 +284,6 @@ func TestConfig_Merge(t *testing.T) {
 			CirconusBrokerSelectTag:            "dc:dc2",
 			PrefixFilter:                       []string{"prefix1", "prefix2"},
 			DisableDispatchedJobSummaryMetrics: true,
-			DisableRPCRateMetricsLabels:        true,
 			FilterDefault:                      pointer.Of(false),
 		},
 		Client: &ClientConfig{
@@ -340,7 +336,6 @@ func TestConfig_Merge(t *testing.T) {
 			NumSchedulers:          pointer.Of(2),
 			EnabledSchedulers:      []string{structs.JobTypeBatch},
 			NodeGCThreshold:        "12h",
-			BatchEvalGCThreshold:   "4h",
 			HeartbeatGrace:         2 * time.Minute,
 			MinHeartbeatTTL:        2 * time.Minute,
 			MaxHeartbeatsPerSecond: 200.0,
@@ -358,17 +353,12 @@ func TestConfig_Merge(t *testing.T) {
 				NodeThreshold: 100,
 				NodeWindow:    11 * time.Minute,
 			},
-			JobMaxPriority:     pointer.Of(200),
-			JobDefaultPriority: pointer.Of(100),
 		},
 		ACL: &ACLConfig{
-			Enabled:               true,
-			TokenTTL:              20 * time.Second,
-			PolicyTTL:             20 * time.Second,
-			RoleTTL:               20 * time.Second,
-			TokenMinExpirationTTL: 20 * time.Second,
-			TokenMaxExpirationTTL: 20 * time.Second,
-			ReplicationToken:      "foobar",
+			Enabled:          true,
+			TokenTTL:         20 * time.Second,
+			PolicyTTL:        20 * time.Second,
+			ReplicationToken: "foobar",
 		},
 		Ports: &Ports{
 			HTTP: 20000,
@@ -664,7 +654,8 @@ func TestConfig_Listener(t *testing.T) {
 	}
 
 	// Works with valid inputs
-	ports := ci.PortAllocator.Grab(2)
+	ports := freeport.MustTake(2)
+	defer freeport.Return(ports)
 
 	ln, err := config.Listener("tcp", "127.0.0.1", ports[0])
 	if err != nil {
@@ -1355,7 +1346,6 @@ func TestTelemetry_Parse(t *testing.T) {
 		prefix_filter = ["+nomad.raft"]
 		filter_default = false
 		disable_dispatched_job_summary_metrics = true
-		disable_rpc_rate_metrics_labels = true
 	}`), 0600)
 	require.NoError(err)
 
@@ -1366,7 +1356,6 @@ func TestTelemetry_Parse(t *testing.T) {
 	require.False(*config.Telemetry.FilterDefault)
 	require.Exactly([]string{"+nomad.raft"}, config.Telemetry.PrefixFilter)
 	require.True(config.Telemetry.DisableDispatchedJobSummaryMetrics)
-	require.True(config.Telemetry.DisableRPCRateMetricsLabels)
 }
 
 func TestEventBroker_Parse(t *testing.T) {

@@ -117,8 +117,9 @@ func (c *VolumeSnapshotCreateCommand) Run(args []string) int {
 
 	secrets := api.CSISecrets{}
 	for _, kv := range secretsArgs {
-		if key, value, found := strings.Cut(kv, "="); found {
-			secrets[key] = value
+		s := strings.Split(kv, "=")
+		if len(s) == 2 {
+			secrets[s[0]] = s[1]
 		} else {
 			c.Ui.Error("Secret must be in the format: -secret key=value")
 			return 1
@@ -127,8 +128,9 @@ func (c *VolumeSnapshotCreateCommand) Run(args []string) int {
 
 	params := map[string]string{}
 	for _, kv := range parametersArgs {
-		if key, value, found := strings.Cut(kv, "="); found {
-			params[key] = value
+		p := strings.Split(kv, "=")
+		if len(p) == 2 {
+			params[p[0]] = p[1]
 		}
 	}
 

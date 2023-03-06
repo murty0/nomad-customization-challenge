@@ -8,53 +8,8 @@ import (
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
 	"github.com/mitchellh/mapstructure"
-	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/require"
 )
-
-func TestTopic_String(t *testing.T) {
-	testutil.Parallel(t)
-
-	testCases := []struct {
-		inputTopic     Topic
-		expectedOutput string
-	}{
-		{
-			inputTopic:     TopicDeployment,
-			expectedOutput: "Deployment",
-		},
-		{
-			inputTopic:     TopicEvaluation,
-			expectedOutput: "Evaluation",
-		},
-		{
-			inputTopic:     TopicAllocation,
-			expectedOutput: "Allocation",
-		},
-		{
-			inputTopic:     TopicJob,
-			expectedOutput: "Job",
-		},
-		{
-			inputTopic:     TopicNode,
-			expectedOutput: "Node",
-		},
-		{
-			inputTopic:     TopicService,
-			expectedOutput: "Service",
-		},
-		{
-			inputTopic:     TopicAll,
-			expectedOutput: "*",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.expectedOutput, func(t *testing.T) {
-			actualOutput := tc.inputTopic.String()
-			must.Eq(t, tc.expectedOutput, actualOutput)
-		})
-	}
-}
 
 func TestEvent_Stream(t *testing.T) {
 	testutil.Parallel(t)
@@ -66,8 +21,8 @@ func TestEvent_Stream(t *testing.T) {
 	jobs := c.Jobs()
 	job := testJob()
 	resp2, _, err := jobs.Register(job, nil)
-	must.NoError(t, err)
-	must.NotNil(t, resp2)
+	require.Nil(t, err)
+	require.NotNil(t, resp2)
 
 	// build event stream request
 	events := c.EventStream()
@@ -80,17 +35,17 @@ func TestEvent_Stream(t *testing.T) {
 	defer cancel()
 
 	streamCh, err := events.Stream(ctx, topics, 0, q)
-	must.NoError(t, err)
+	require.NoError(t, err)
 
 	select {
 	case event := <-streamCh:
 		if event.Err != nil {
-			must.Unreachable(t, must.Sprintf("unexpected %v", event.Err))
+			require.Fail(t, err.Error())
 		}
-		must.Len(t, 1, event.Events)
-		must.Eq(t, "Evaluation", string(event.Events[0].Topic))
+		require.Equal(t, len(event.Events), 1)
+		require.Equal(t, "Evaluation", string(event.Events[0].Topic))
 	case <-time.After(5 * time.Second):
-		must.Unreachable(t, must.Sprint("failed waiting for event stream event"))
+		require.Fail(t, "failed waiting for event stream event")
 	}
 }
 
@@ -104,8 +59,8 @@ func TestEvent_Stream_Err_InvalidQueryParam(t *testing.T) {
 	jobs := c.Jobs()
 	job := testJob()
 	resp2, _, err := jobs.Register(job, nil)
-	must.NoError(t, err)
-	must.NotNil(t, resp2)
+	require.Nil(t, err)
+	require.NotNil(t, resp2)
 
 	// build event stream request
 	events := c.EventStream()
@@ -118,7 +73,9 @@ func TestEvent_Stream_Err_InvalidQueryParam(t *testing.T) {
 	defer cancel()
 
 	_, err = events.Stream(ctx, topics, 0, q)
-	must.ErrorContains(t, err, "Invalid key value pair")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "400")
+	require.Contains(t, err.Error(), "Invalid key value pair")
 }
 
 func TestEvent_Stream_CloseCtx(t *testing.T) {
@@ -131,8 +88,8 @@ func TestEvent_Stream_CloseCtx(t *testing.T) {
 	jobs := c.Jobs()
 	job := testJob()
 	resp2, _, err := jobs.Register(job, nil)
-	must.NoError(t, err)
-	must.NotNil(t, resp2)
+	require.Nil(t, err)
+	require.NotNil(t, resp2)
 
 	// build event stream request
 	events := c.EventStream()
@@ -144,17 +101,17 @@ func TestEvent_Stream_CloseCtx(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	streamCh, err := events.Stream(ctx, topics, 0, q)
-	must.NoError(t, err)
+	require.NoError(t, err)
 
 	// cancel the request
 	cancel()
 
 	select {
 	case event, ok := <-streamCh:
-		must.False(t, ok)
-		must.Nil(t, event)
+		require.False(t, ok)
+		require.Nil(t, event)
 	case <-time.After(5 * time.Second):
-		must.Unreachable(t, must.Sprint("failed waiting for event stream event"))
+		require.Fail(t, "failed waiting for event stream event")
 	}
 }
 
@@ -170,8 +127,8 @@ func TestEventStream_PayloadValue(t *testing.T) {
 	jobs := c.Jobs()
 	job := testJob()
 	resp2, _, err := jobs.Register(job, nil)
-	must.NoError(t, err)
-	must.NotNil(t, resp2)
+	require.Nil(t, err)
+	require.NotNil(t, resp2)
 
 	// build event stream request
 	events := c.EventStream()
@@ -184,18 +141,18 @@ func TestEventStream_PayloadValue(t *testing.T) {
 	defer cancel()
 
 	streamCh, err := events.Stream(ctx, topics, 0, q)
-	must.NoError(t, err)
+	require.NoError(t, err)
 
 	select {
 	case event := <-streamCh:
 		if event.Err != nil {
-			must.NoError(t, err)
+			require.NoError(t, err)
 		}
 		for _, e := range event.Events {
 			// verify that we get a node
 			n, err := e.Node()
-			must.NoError(t, err)
-			must.UUIDv4(t, n.ID)
+			require.NoError(t, err)
+			require.NotEmpty(t, n.ID)
 
 			// perform a raw decoding and look for:
 			// - "ID" to make sure that raw decoding is working correctly
@@ -205,15 +162,15 @@ func TestEventStream_PayloadValue(t *testing.T) {
 				Result: &raw,
 			}
 			dec, err := mapstructure.NewDecoder(cfg)
-			must.NoError(t, err)
-			must.NoError(t, dec.Decode(e.Payload))
-			must.MapContainsKeys(t, raw, []string{"Node"})
+			require.NoError(t, err)
+			require.NoError(t, dec.Decode(e.Payload))
+			require.Contains(t, raw, "Node")
 			rawNode := raw["Node"]
-			must.Eq(t, n.ID, rawNode["ID"].(string))
-			must.Eq(t, "", rawNode["SecretID"])
+			require.Equal(t, n.ID, rawNode["ID"])
+			require.Empty(t, rawNode["SecretID"])
 		}
 	case <-time.After(5 * time.Second):
-		must.Unreachable(t, must.Sprint("failed waiting for event stream event"))
+		require.Fail(t, "failed waiting for event stream event")
 	}
 }
 
@@ -232,12 +189,13 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 			input: []byte(`{"Topic": "Deployment", "Payload": {"Deployment":{"ID":"some-id","JobID":"some-job-id", "TaskGroups": {"tg1": {"RequireProgressBy": "2020-11-05T11:52:54.370774000-05:00"}}}}}`),
 			expectFn: func(t *testing.T, event Event) {
 				eventTime, err := time.Parse(time.RFC3339, "2020-11-05T11:52:54.370774000-05:00")
-				must.NoError(t, err)
-				must.Eq(t, TopicDeployment, event.Topic)
+				require.NoError(t, err)
+				require.Equal(t, TopicDeployment, event.Topic)
 
 				d, err := event.Deployment()
-				must.NoError(t, err)
-				must.Eq(t, &Deployment{
+				require.NoError(t, err)
+				require.NoError(t, err)
+				require.Equal(t, &Deployment{
 					ID:    "some-id",
 					JobID: "some-job-id",
 					TaskGroups: map[string]*DeploymentState{
@@ -252,10 +210,11 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 			desc:  "evaluation",
 			input: []byte(`{"Topic": "Evaluation", "Payload": {"Evaluation":{"ID":"some-id","Namespace":"some-namespace-id"}}}`),
 			expectFn: func(t *testing.T, event Event) {
-				must.Eq(t, TopicEvaluation, event.Topic)
+				require.Equal(t, TopicEvaluation, event.Topic)
 				eval, err := event.Evaluation()
-				must.NoError(t, err)
-				must.Eq(t, &Evaluation{
+				require.NoError(t, err)
+
+				require.Equal(t, &Evaluation{
 					ID:        "some-id",
 					Namespace: "some-namespace-id",
 				}, eval)
@@ -265,10 +224,10 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 			desc:  "allocation",
 			input: []byte(`{"Topic": "Allocation", "Payload": {"Allocation":{"ID":"some-id","Namespace":"some-namespace-id"}}}`),
 			expectFn: func(t *testing.T, event Event) {
-				must.Eq(t, TopicAllocation, event.Topic)
+				require.Equal(t, TopicAllocation, event.Topic)
 				a, err := event.Allocation()
-				must.NoError(t, err)
-				must.Eq(t, &Allocation{
+				require.NoError(t, err)
+				require.Equal(t, &Allocation{
 					ID:        "some-id",
 					Namespace: "some-namespace-id",
 				}, a)
@@ -277,10 +236,10 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 		{
 			input: []byte(`{"Topic": "Job", "Payload": {"Job":{"ID":"some-id","Namespace":"some-namespace-id"}}}`),
 			expectFn: func(t *testing.T, event Event) {
-				must.Eq(t, TopicJob, event.Topic)
+				require.Equal(t, TopicJob, event.Topic)
 				j, err := event.Job()
-				must.NoError(t, err)
-				must.Eq(t, &Job{
+				require.NoError(t, err)
+				require.Equal(t, &Job{
 					ID:        pointerOf("some-id"),
 					Namespace: pointerOf("some-namespace-id"),
 				}, j)
@@ -290,10 +249,10 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 			desc:  "node",
 			input: []byte(`{"Topic": "Node", "Payload": {"Node":{"ID":"some-id","Datacenter":"some-dc-id"}}}`),
 			expectFn: func(t *testing.T, event Event) {
-				must.Eq(t, TopicNode, event.Topic)
+				require.Equal(t, TopicNode, event.Topic)
 				n, err := event.Node()
-				must.NoError(t, err)
-				must.Eq(t, &Node{
+				require.NoError(t, err)
+				require.Equal(t, &Node{
 					ID:         "some-id",
 					Datacenter: "some-dc-id",
 				}, n)
@@ -303,12 +262,12 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 			desc:  "service",
 			input: []byte(`{"Topic": "Service", "Payload": {"Service":{"ID":"some-service-id","Namespace":"some-service-namespace-id","Datacenter":"us-east-1a"}}}`),
 			expectFn: func(t *testing.T, event Event) {
-				must.Eq(t, TopicService, event.Topic)
+				require.Equal(t, TopicService, event.Topic)
 				a, err := event.Service()
-				must.NoError(t, err)
-				must.Eq(t, "us-east-1a", a.Datacenter)
-				must.Eq(t, "some-service-id", a.ID)
-				must.Eq(t, "some-service-namespace-id", a.Namespace)
+				require.NoError(t, err)
+				require.Equal(t, "us-east-1a", a.Datacenter)
+				require.Equal(t, "some-service-id", a.ID)
+				require.Equal(t, "some-service-namespace-id", a.Namespace)
 			},
 		},
 	}
@@ -317,7 +276,7 @@ func TestEventStream_PayloadValueHelpers(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			var out Event
 			err := json.Unmarshal(tc.input, &out)
-			must.NoError(t, err)
+			require.NoError(t, err)
 			tc.expectFn(t, out)
 		})
 	}

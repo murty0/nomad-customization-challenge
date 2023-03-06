@@ -8,14 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/sdk/testutil/retry"
 	"github.com/hashicorp/go-hclog"
 	memdb "github.com/hashicorp/go-memdb"
 	"github.com/hashicorp/go-version"
-	"github.com/shoenig/test/must"
-	"github.com/shoenig/test/wait"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper"
 	"github.com/hashicorp/nomad/nomad/mock"
@@ -24,6 +20,8 @@ import (
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/serf/serf"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLeader_LeftServer(t *testing.T) {
@@ -768,8 +766,11 @@ func TestLeader_ClusterID_upgradePath(t *testing.T) {
 	// A check that ClusterID is not available yet
 	noIDYet := func() {
 		for _, s := range servers {
-			_, err := s.s.ClusterID()
-			must.Error(t, err)
+			retry.Run(t, func(r *retry.R) {
+				if _, err := s.s.ClusterID(); err == nil {
+					r.Error("expected error")
+				}
+			})
 		}
 	}
 
@@ -860,32 +861,23 @@ func TestLeader_ClusterID_noUpgrade(t *testing.T) {
 }
 
 func agreeClusterID(t *testing.T, servers []*Server) {
-	must.Len(t, 3, servers)
-
-	f := func() error {
-		id1, err1 := servers[0].ClusterID()
-		if err1 != nil {
-			return err1
-		}
-		id2, err2 := servers[1].ClusterID()
-		if err2 != nil {
-			return err2
-		}
-		id3, err3 := servers[2].ClusterID()
-		if err3 != nil {
-			return err3
-		}
-		if id1 != id2 || id2 != id3 {
-			return fmt.Errorf("ids do not match, id1: %s, id2: %s, id3: %s", id1, id2, id3)
-		}
-		return nil
+	retries := &retry.Timer{Timeout: 60 * time.Second, Wait: 1 * time.Second}
+	ids := make([]string, 3)
+	for i, s := range servers {
+		retry.RunWith(retries, t, func(r *retry.R) {
+			id, err := s.ClusterID()
+			if err != nil {
+				r.Error(err.Error())
+				return
+			}
+			if !helper.IsUUID(id) {
+				r.Error("not a UUID")
+				return
+			}
+			ids[i] = id
+		})
 	}
-
-	must.Wait(t, wait.InitialSuccess(
-		wait.ErrorFunc(f),
-		wait.Timeout(60*time.Second),
-		wait.Gap(1*time.Second),
-	))
+	require.True(t, ids[0] == ids[1] && ids[1] == ids[2], "ids[0] %s, ids[1] %s, ids[2] %s", ids[0], ids[1], ids[2])
 }
 
 func TestLeader_ReplicateACLPolicies(t *testing.T) {
@@ -1033,183 +1025,109 @@ func TestLeader_DiffACLTokens(t *testing.T) {
 	assert.Equal(t, []string{p3.AccessorID, p4.AccessorID}, update)
 }
 
-func TestServer_replicationBackoffContinue(t *testing.T) {
+func TestLeader_UpgradeRaftVersion(t *testing.T) {
 	ci.Parallel(t)
 
-	testCases := []struct {
-		name   string
-		testFn func()
-	}{
-		{
-			name: "leadership lost",
-			testFn: func() {
+	s1, cleanupS1 := TestServer(t, func(c *Config) {
+		c.Datacenter = "dc1"
+		c.RaftConfig.ProtocolVersion = 2
+	})
+	defer cleanupS1()
 
-				// Create a test server with a long enough backoff that we will
-				// be able to close the channel before it fires, but not too
-				// long that the test having problems means CI will hang
-				// forever.
-				testServer, testServerCleanup := TestServer(t, func(c *Config) {
-					c.ReplicationBackoff = 5 * time.Second
-				})
-				defer testServerCleanup()
+	s2, cleanupS2 := TestServer(t, func(c *Config) {
+		c.BootstrapExpect = 3
+		c.RaftConfig.ProtocolVersion = 1
+	})
+	defer cleanupS2()
 
-				// Create our stop channel which is used by the server to
-				// indicate leadership loss.
-				stopCh := make(chan struct{})
+	s3, cleanupS3 := TestServer(t, func(c *Config) {
+		c.BootstrapExpect = 3
+		c.RaftConfig.ProtocolVersion = 2
+	})
+	defer cleanupS3()
 
-				// The resultCh is used to block and collect the output from
-				// the test routine.
-				resultCh := make(chan bool, 1)
+	servers := []*Server{s1, s2, s3}
 
-				// Run a routine to collect the result and close the channel
-				// straight away.
-				go func() {
-					output := testServer.replicationBackoffContinue(stopCh)
-					resultCh <- output
-				}()
+	// Try to join
+	TestJoin(t, s1, s2, s3)
 
-				close(stopCh)
-
-				actualResult := <-resultCh
-				require.False(t, actualResult)
-			},
-		},
-		{
-			name: "backoff continue",
-			testFn: func() {
-
-				// Create a test server with a short backoff.
-				testServer, testServerCleanup := TestServer(t, func(c *Config) {
-					c.ReplicationBackoff = 10 * time.Nanosecond
-				})
-				defer testServerCleanup()
-
-				// Create our stop channel which is used by the server to
-				// indicate leadership loss.
-				stopCh := make(chan struct{})
-
-				// The resultCh is used to block and collect the output from
-				// the test routine.
-				resultCh := make(chan bool, 1)
-
-				// Run a routine to collect the result without closing stopCh.
-				go func() {
-					output := testServer.replicationBackoffContinue(stopCh)
-					resultCh <- output
-				}()
-
-				actualResult := <-resultCh
-				require.True(t, actualResult)
-			},
-		},
-	}
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			tc.testFn()
+	for _, s := range servers {
+		testutil.WaitForResult(func() (bool, error) {
+			peers, _ := s.numPeers()
+			return peers == 3, nil
+		}, func(err error) {
+			t.Fatalf("should have 3 peers")
 		})
 	}
-}
 
-func Test_diffACLRoles(t *testing.T) {
-	ci.Parallel(t)
+	// Kill the v1 server
+	if err := s2.Leave(); err != nil {
+		t.Fatal(err)
+	}
 
-	stateStore := state.TestStateStore(t)
+	for _, s := range []*Server{s1, s3} {
+		minVer, err := s.autopilot.MinRaftProtocol()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := minVer, 2; got != want {
+			t.Fatalf("got min raft version %d want %d", got, want)
+		}
+	}
 
-	// Build an initial baseline of ACL Roles.
-	aclRole0 := mock.ACLRole()
-	aclRole1 := mock.ACLRole()
-	aclRole2 := mock.ACLRole()
-	aclRole3 := mock.ACLRole()
+	// Replace the dead server with one running raft protocol v3
+	s4, cleanupS4 := TestServer(t, func(c *Config) {
+		c.BootstrapExpect = 3
+		c.Datacenter = "dc1"
+		c.RaftConfig.ProtocolVersion = 3
+	})
+	defer cleanupS4()
+	TestJoin(t, s1, s4)
+	servers[1] = s4
 
-	// Upsert these into our local state. Use copies, so we can alter the roles
-	// directly and use within the diff func.
-	err := stateStore.UpsertACLRoles(structs.MsgTypeTestSetup, 50,
-		[]*structs.ACLRole{aclRole0.Copy(), aclRole1.Copy(), aclRole2.Copy(), aclRole3.Copy()}, true)
-	require.NoError(t, err)
+	// Make sure we're back to 3 total peers with the new one added via ID
+	for _, s := range servers {
+		testutil.WaitForResult(func() (bool, error) {
+			addrs := 0
+			ids := 0
+			future := s.raft.GetConfiguration()
+			if err := future.Error(); err != nil {
+				return false, err
+			}
+			for _, server := range future.Configuration().Servers {
+				if string(server.ID) == string(server.Address) {
+					addrs++
+				} else {
+					ids++
+				}
+			}
+			if got, want := addrs, 2; got != want {
+				return false, fmt.Errorf("got %d server addresses want %d", got, want)
+			}
+			if got, want := ids, 1; got != want {
+				return false, fmt.Errorf("got %d server ids want %d", got, want)
+			}
 
-	// Modify the ACL roles to create a number of differences. These roles
-	// represent the state of the authoritative region.
-	aclRole2.ModifyIndex = 50
-	aclRole3.ModifyIndex = 200
-	aclRole3.Hash = []byte{0, 1, 2, 3}
-	aclRole4 := mock.ACLRole()
-
-	// Run the diff function and test the output.
-	toDelete, toUpdate := diffACLRoles(stateStore, 50, []*structs.ACLRoleListStub{
-		aclRole2.Stub(), aclRole3.Stub(), aclRole4.Stub()})
-	require.ElementsMatch(t, []string{aclRole0.ID, aclRole1.ID}, toDelete)
-	require.ElementsMatch(t, []string{aclRole3.ID, aclRole4.ID}, toUpdate)
-}
-
-func Test_diffACLAuthMethods(t *testing.T) {
-	ci.Parallel(t)
-
-	stateStore := state.TestStateStore(t)
-
-	// Build an initial baseline of ACL auth-methods.
-	aclAuthMethod0 := mock.ACLAuthMethod()
-	aclAuthMethod1 := mock.ACLAuthMethod()
-	aclAuthMethod2 := mock.ACLAuthMethod()
-	aclAuthMethod3 := mock.ACLAuthMethod()
-
-	// Upsert these into our local state. Use copies, so we can alter the
-	// auth-methods directly and use within the diff func.
-	err := stateStore.UpsertACLAuthMethods(50,
-		[]*structs.ACLAuthMethod{aclAuthMethod0.Copy(), aclAuthMethod1.Copy(),
-			aclAuthMethod2.Copy(), aclAuthMethod3.Copy()})
-	must.NoError(t, err)
-
-	// Modify the ACL auth-methods to create a number of differences. These
-	// methods represent the state of the authoritative region.
-	aclAuthMethod2.ModifyIndex = 50
-	aclAuthMethod3.ModifyIndex = 200
-	aclAuthMethod3.Hash = []byte{0, 1, 2, 3}
-	aclAuthMethod4 := mock.ACLAuthMethod()
-
-	// Run the diff function and test the output.
-	toDelete, toUpdate := diffACLAuthMethods(stateStore, 50, []*structs.ACLAuthMethodStub{
-		aclAuthMethod2.Stub(), aclAuthMethod3.Stub(), aclAuthMethod4.Stub()})
-	require.ElementsMatch(t, []string{aclAuthMethod0.Name, aclAuthMethod1.Name}, toDelete)
-	require.ElementsMatch(t, []string{aclAuthMethod3.Name, aclAuthMethod4.Name}, toUpdate)
-}
-
-func Test_diffACLBindingRules(t *testing.T) {
-	ci.Parallel(t)
-
-	stateStore := state.TestStateStore(t)
-
-	// Build an initial baseline of ACL binding rules.
-	aclBindingRule0 := mock.ACLBindingRule()
-	aclBindingRule1 := mock.ACLBindingRule()
-	aclBindingRule2 := mock.ACLBindingRule()
-	aclBindingRule3 := mock.ACLBindingRule()
-
-	// Upsert these into our local state. Use copies, so we can alter the
-	// binding rules directly and use within the diff func.
-	err := stateStore.UpsertACLBindingRules(50,
-		[]*structs.ACLBindingRule{aclBindingRule0.Copy(), aclBindingRule1.Copy(),
-			aclBindingRule2.Copy(), aclBindingRule3.Copy()}, true)
-	must.NoError(t, err)
-
-	// Modify the ACL auth-methods to create a number of differences. These
-	// methods represent the state of the authoritative region.
-	aclBindingRule2.ModifyIndex = 50
-	aclBindingRule3.ModifyIndex = 200
-	aclBindingRule3.Hash = []byte{0, 1, 2, 3}
-	aclBindingRule4 := mock.ACLBindingRule()
-
-	// Run the diff function and test the output.
-	toDelete, toUpdate := diffACLBindingRules(stateStore, 50, []*structs.ACLBindingRuleListStub{
-		aclBindingRule2.Stub(), aclBindingRule3.Stub(), aclBindingRule4.Stub()})
-	must.SliceContainsAll(t, []string{aclBindingRule0.ID, aclBindingRule1.ID}, toDelete)
-	must.SliceContainsAll(t, []string{aclBindingRule3.ID, aclBindingRule4.ID}, toUpdate)
+			return true, nil
+		}, func(err error) {
+			t.Fatal(err)
+		})
+	}
 }
 
 func TestLeader_Reelection(t *testing.T) {
 	ci.Parallel(t)
 
-	const raftProtocol = 3
+	raftProtocols := []int{1, 2, 3}
+	for _, p := range raftProtocols {
+		t.Run(fmt.Sprintf("Leader Election - Protocol version %d", p), func(t *testing.T) {
+			leaderElectionTest(t, raft.ProtocolVersion(p))
+		})
+	}
 
+}
+
+func leaderElectionTest(t *testing.T, raftProtocol raft.ProtocolVersion) {
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
 		c.RaftConfig.ProtocolVersion = raftProtocol
@@ -1260,134 +1178,173 @@ func TestLeader_Reelection(t *testing.T) {
 		}
 	}
 
-	// make sure we still have a leader, then shut it down
-	must.NotNil(t, leader, must.Sprint("expected there to be a leader"))
+	// Shutdown the leader
 	leader.Shutdown()
-
 	// Wait for new leader to elect
 	testutil.WaitForLeader(t, nonLeader.RPC)
 }
 
 func TestLeader_RollRaftServer(t *testing.T) {
 	ci.Parallel(t)
+	ci.SkipSlow(t, "flaky on GHA; #12358")
 
 	s1, cleanupS1 := TestServer(t, func(c *Config) {
-		c.BootstrapExpect = 3
-		c.RaftConfig.ProtocolVersion = 3
+		c.RaftConfig.ProtocolVersion = 2
 	})
 	defer cleanupS1()
 
 	s2, cleanupS2 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
-		c.RaftConfig.ProtocolVersion = 3
+		c.RaftConfig.ProtocolVersion = 2
 	})
 	defer cleanupS2()
 
 	s3, cleanupS3 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
-		c.RaftConfig.ProtocolVersion = 3
+		c.RaftConfig.ProtocolVersion = 2
 	})
 	defer cleanupS3()
 
 	servers := []*Server{s1, s2, s3}
+
+	// Try to join
 	TestJoin(t, s1, s2, s3)
 
-	t.Logf("waiting for initial stable cluster")
-	waitForStableLeadership(t, servers)
-
-	t.Logf("killing server s1")
-	s1.Shutdown()
-	for _, s := range []*Server{s2, s3} {
-		s.RemoveFailedNode(s1.config.NodeID)
+	for _, s := range servers {
+		retry.Run(t, func(r *retry.R) { r.Check(wantPeers(s, 3)) })
 	}
 
-	t.Logf("waiting for server loss to be detected")
-	testutil.WaitForResultUntil(time.Second*10,
-		func() (bool, error) {
-			for _, s := range []*Server{s2, s3} {
-				err := wantPeers(s, 2)
-				if err != nil {
-					return false, err
-				}
+	// Kill the first v2 server
+	s1.Shutdown()
+
+	for _, s := range []*Server{s2, s3} {
+		s.RemoveFailedNode(s1.config.NodeID)
+
+		retry.Run(t, func(r *retry.R) {
+			minVer, err := s.autopilot.MinRaftProtocol()
+			if err != nil {
+				r.Fatal(err)
 			}
-			return true, nil
+			if got, want := minVer, 2; got != want {
+				r.Fatalf("got min raft version %d want %d", got, want)
+			}
 
-		},
-		func(err error) { must.NoError(t, err) },
-	)
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
+			}
+		})
+	}
 
-	t.Logf("adding replacement server s4")
+	// Replace the dead server with one running raft protocol v3
 	s4, cleanupS4 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
 		c.RaftConfig.ProtocolVersion = 3
 	})
 	defer cleanupS4()
 	TestJoin(t, s2, s3, s4)
-	servers = []*Server{s4, s2, s3}
+	servers[0] = s4
 
-	t.Logf("waiting for s4 to stabilize")
-	waitForStableLeadership(t, servers)
-
-	t.Logf("killing server s2")
+	// Kill the second v2 server
 	s2.Shutdown()
+
 	for _, s := range []*Server{s3, s4} {
 		s.RemoveFailedNode(s2.config.NodeID)
-	}
 
-	t.Logf("waiting for server loss to be detected")
-	testutil.WaitForResultUntil(time.Second*10,
-		func() (bool, error) {
-			for _, s := range []*Server{s3, s4} {
-				err := wantPeers(s, 2)
-				if err != nil {
-					return false, err
-				}
+		retry.RunWith(&retry.Counter{
+			Count: int(10 * testutil.TestMultiplier()),
+			Wait:  time.Duration(testutil.TestMultiplier()) * time.Second,
+		}, t, func(r *retry.R) {
+			minVer, err := s.autopilot.MinRaftProtocol()
+			if err != nil {
+				r.Fatal(err)
 			}
-			return true, nil
-		},
-		func(err error) { must.NoError(t, err) },
-	)
+			if got, want := minVer, 2; got != want {
+				r.Fatalf("got min raft version %d want %d", got, want)
+			}
 
-	t.Logf("adding replacement server s5")
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
+			}
+		})
+	}
+	// Replace another dead server with one running raft protocol v3
 	s5, cleanupS5 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
 		c.RaftConfig.ProtocolVersion = 3
 	})
 	defer cleanupS5()
 	TestJoin(t, s3, s4, s5)
-	servers = []*Server{s4, s5, s3}
+	servers[1] = s5
 
-	t.Logf("waiting for s5 to stabilize")
-	waitForStableLeadership(t, servers)
-
-	t.Logf("killing server s3")
+	// Kill the last v2 server, now minRaftProtocol should be 3
 	s3.Shutdown()
 
-	t.Logf("waiting for server loss to be detected")
-	testutil.WaitForResultUntil(time.Second*10,
-		func() (bool, error) {
-			for _, s := range []*Server{s4, s5} {
-				err := wantPeers(s, 2)
-				if err != nil {
-					return false, err
-				}
-			}
-			return true, nil
-		},
-		func(err error) { must.NoError(t, err) },
-	)
+	for _, s := range []*Server{s4, s5} {
+		s.RemoveFailedNode(s2.config.NodeID)
 
-	t.Logf("adding replacement server s6")
+		retry.RunWith(&retry.Counter{
+			Count: int(10 * testutil.TestMultiplier()),
+			Wait:  time.Duration(testutil.TestMultiplier()) * time.Second,
+		}, t, func(r *retry.R) {
+			minVer, err := s.autopilot.MinRaftProtocol()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if got, want := minVer, 3; got != want {
+				r.Fatalf("got min raft version %d want %d", got, want)
+			}
+
+			configFuture := s.raft.GetConfiguration()
+			if err != nil {
+				r.Fatal(err)
+			}
+			if len(configFuture.Configuration().Servers) != 2 {
+				r.Fatalf("expected 2 servers, got %d", len(configFuture.Configuration().Servers))
+			}
+		})
+	}
+
+	// Replace the last dead server with one running raft protocol v3
 	s6, cleanupS6 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 3
 		c.RaftConfig.ProtocolVersion = 3
 	})
 	defer cleanupS6()
 	TestJoin(t, s6, s4)
-	servers = []*Server{s4, s5, s6}
+	servers[2] = s6
 
-	t.Logf("waiting for s6 to stabilize")
-	waitForStableLeadership(t, servers)
+	// Make sure all the dead servers are removed and we're back to 3 total peers
+	for _, s := range servers {
+		retry.Run(t, func(r *retry.R) {
+			addrs := 0
+			ids := 0
+			future := s.raft.GetConfiguration()
+			if err := future.Error(); err != nil {
+				r.Fatal(err)
+			}
+			for _, server := range future.Configuration().Servers {
+				if string(server.ID) == string(server.Address) {
+					addrs++
+				} else {
+					ids++
+				}
+			}
+			if got, want := addrs, 0; got != want {
+				r.Fatalf("got %d server addresses want %d", got, want)
+			}
+			if got, want := ids, 3; got != want {
+				r.Fatalf("got %d server ids want %d", got, want)
+			}
+		})
+	}
 }
 
 func TestLeader_RevokeLeadership_MultipleTimes(t *testing.T) {
@@ -1494,7 +1451,7 @@ func TestServer_ReconcileMember(t *testing.T) {
 	// after leadership has been established to reduce
 	s3, cleanupS3 := TestServer(t, func(c *Config) {
 		c.BootstrapExpect = 0
-		c.RaftConfig.ProtocolVersion = 3
+		c.RaftConfig.ProtocolVersion = 2
 	})
 	defer cleanupS3()
 
@@ -1706,27 +1663,6 @@ func waitForStableLeadership(t *testing.T, servers []*Server) *Server {
 	})
 
 	return leader
-}
-
-func TestServer_getLatestIndex(t *testing.T) {
-	ci.Parallel(t)
-
-	testServer, testServerCleanup := TestServer(t, nil)
-	defer testServerCleanup()
-
-	// Test a new state store value.
-	idx, success := testServer.getLatestIndex()
-	require.True(t, success)
-	must.Eq(t, 1, idx)
-
-	// Upsert something with a high index, and check again.
-	err := testServer.State().UpsertACLPolicies(
-		structs.MsgTypeTestSetup, 1013, []*structs.ACLPolicy{mock.ACLPolicy()})
-	require.NoError(t, err)
-
-	idx, success = testServer.getLatestIndex()
-	require.True(t, success)
-	must.Eq(t, 1013, idx)
 }
 
 func TestServer_handleEvalBrokerStateChange(t *testing.T) {

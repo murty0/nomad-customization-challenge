@@ -28,8 +28,8 @@ func (d drainerShim) NodesDrainComplete(nodes []string, event *structs.NodeEvent
 		}
 	}
 
-	_, index, err := d.s.raftApply(structs.BatchNodeUpdateDrainRequestType, args)
-	return index, err
+	resp, index, err := d.s.raftApply(structs.BatchNodeUpdateDrainRequestType, args)
+	return d.convertApplyErrors(resp, index, err)
 }
 
 func (d drainerShim) AllocUpdateDesiredTransition(allocs map[string]*structs.DesiredTransition, evals []*structs.Evaluation) (uint64, error) {
@@ -38,6 +38,19 @@ func (d drainerShim) AllocUpdateDesiredTransition(allocs map[string]*structs.Des
 		Evals:        evals,
 		WriteRequest: structs.WriteRequest{Region: d.s.config.Region},
 	}
-	_, index, err := d.s.raftApply(structs.AllocUpdateDesiredTransitionRequestType, args)
+	resp, index, err := d.s.raftApply(structs.AllocUpdateDesiredTransitionRequestType, args)
+	return d.convertApplyErrors(resp, index, err)
+}
+
+// convertApplyErrors parses the results of a raftApply and returns the index at
+// which it was applied and any error that occurred. Raft Apply returns two
+// separate errors, Raft library errors and user returned errors from the FSM.
+// This helper, joins the errors by inspecting the applyResponse for an error.
+func (d drainerShim) convertApplyErrors(applyResp interface{}, index uint64, err error) (uint64, error) {
+	if applyResp != nil {
+		if fsmErr, ok := applyResp.(error); ok && fsmErr != nil {
+			return index, fsmErr
+		}
+	}
 	return index, err
 }

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/require"
 )
 
 func TestServiceRegistrations_List(t *testing.T) {
@@ -21,25 +21,21 @@ func TestServiceRegistrations_Delete(t *testing.T) {
 	// TODO(jrasell) add tests once registration process is in place.
 }
 
+
 func TestService_Canonicalize(t *testing.T) {
 	testutil.Parallel(t)
 
 	j := &Job{Name: pointerOf("job")}
 	tg := &TaskGroup{Name: pointerOf("group")}
 	task := &Task{Name: "task"}
-	s := &Service{
-		TaggedAddresses: make(map[string]string),
-	}
+	s := &Service{}
 
 	s.Canonicalize(task, tg, j)
 
-	must.Eq(t, fmt.Sprintf("%s-%s-%s", *j.Name, *tg.Name, task.Name), s.Name)
-	must.Eq(t, "auto", s.AddressMode)
-	must.Eq(t, OnUpdateRequireHealthy, s.OnUpdate)
-	must.Eq(t, ServiceProviderConsul, s.Provider)
-	must.Nil(t, s.Meta)
-	must.Nil(t, s.CanaryMeta)
-	must.Nil(t, s.TaggedAddresses)
+	require.Equal(t, fmt.Sprintf("%s-%s-%s", *j.Name, *tg.Name, task.Name), s.Name)
+	require.Equal(t, "auto", s.AddressMode)
+	require.Equal(t, OnUpdateRequireHealthy, s.OnUpdate)
+	require.Equal(t, ServiceProviderConsul, s.Provider)
 }
 
 func TestServiceCheck_Canonicalize(t *testing.T) {
@@ -57,7 +53,8 @@ func TestServiceCheck_Canonicalize(t *testing.T) {
 	}
 
 	s.Canonicalize(task, tg, j)
-	must.Eq(t, OnUpdateRequireHealthy, s.Checks[0].OnUpdate)
+
+	require.Equal(t, OnUpdateRequireHealthy, s.Checks[0].OnUpdate)
 }
 
 func TestService_Check_PassFail(t *testing.T) {
@@ -76,8 +73,8 @@ func TestService_Check_PassFail(t *testing.T) {
 		}
 
 		s.Canonicalize(task, tg, job)
-		must.Zero(t, s.Checks[0].SuccessBeforePassing)
-		must.Zero(t, s.Checks[0].FailuresBeforeCritical)
+		require.Zero(t, s.Checks[0].SuccessBeforePassing)
+		require.Zero(t, s.Checks[0].FailuresBeforeCritical)
 	})
 
 	t.Run("normal", func(t *testing.T) {
@@ -89,8 +86,8 @@ func TestService_Check_PassFail(t *testing.T) {
 		}
 
 		s.Canonicalize(task, tg, job)
-		must.Eq(t, 3, s.Checks[0].SuccessBeforePassing)
-		must.Eq(t, 4, s.Checks[0].FailuresBeforeCritical)
+		require.Equal(t, 3, s.Checks[0].SuccessBeforePassing)
+		require.Equal(t, 4, s.Checks[0].FailuresBeforeCritical)
 	})
 }
 
@@ -131,17 +128,17 @@ func TestService_CheckRestart(t *testing.T) {
 	}
 
 	service.Canonicalize(task, tg, job)
-	must.Eq(t, 22, service.Checks[0].CheckRestart.Limit)
-	must.Eq(t, 22*time.Second, *service.Checks[0].CheckRestart.Grace)
-	must.True(t, service.Checks[0].CheckRestart.IgnoreWarnings)
+	require.Equal(t, service.Checks[0].CheckRestart.Limit, 22)
+	require.Equal(t, *service.Checks[0].CheckRestart.Grace, 22*time.Second)
+	require.True(t, service.Checks[0].CheckRestart.IgnoreWarnings)
 
-	must.Eq(t, 33, service.Checks[1].CheckRestart.Limit)
-	must.Eq(t, 33*time.Second, *service.Checks[1].CheckRestart.Grace)
-	must.True(t, service.Checks[1].CheckRestart.IgnoreWarnings)
+	require.Equal(t, service.Checks[1].CheckRestart.Limit, 33)
+	require.Equal(t, *service.Checks[1].CheckRestart.Grace, 33*time.Second)
+	require.True(t, service.Checks[1].CheckRestart.IgnoreWarnings)
 
-	must.Eq(t, 11, service.Checks[2].CheckRestart.Limit)
-	must.Eq(t, 11*time.Second, *service.Checks[2].CheckRestart.Grace)
-	must.True(t, service.Checks[2].CheckRestart.IgnoreWarnings)
+	require.Equal(t, service.Checks[2].CheckRestart.Limit, 11)
+	require.Equal(t, *service.Checks[2].CheckRestart.Grace, 11*time.Second)
+	require.True(t, service.Checks[2].CheckRestart.IgnoreWarnings)
 }
 
 func TestService_Connect_proxy_settings(t *testing.T) {
@@ -170,15 +167,16 @@ func TestService_Connect_proxy_settings(t *testing.T) {
 
 	service.Canonicalize(task, tg, job)
 	proxy := service.Connect.SidecarService.Proxy
-	must.Eq(t, "upstream", proxy.Upstreams[0].DestinationName)
-	must.Eq(t, 80, proxy.Upstreams[0].LocalBindPort)
-	must.Eq(t, "dc2", proxy.Upstreams[0].Datacenter)
-	must.Eq(t, "127.0.0.2", proxy.Upstreams[0].LocalBindAddress)
-	must.Eq(t, 8000, proxy.LocalServicePort)
+	require.Equal(t, proxy.Upstreams[0].DestinationName, "upstream")
+	require.Equal(t, proxy.Upstreams[0].LocalBindPort, 80)
+	require.Equal(t, proxy.Upstreams[0].Datacenter, "dc2")
+	require.Equal(t, proxy.Upstreams[0].LocalBindAddress, "127.0.0.2")
+	require.Equal(t, proxy.LocalServicePort, 8000)
 }
 
 func TestService_Tags(t *testing.T) {
 	testutil.Parallel(t)
+	r := require.New(t)
 
 	// canonicalize does not modify eto or tags
 	job := &Job{Name: pointerOf("job")}
@@ -191,7 +189,7 @@ func TestService_Tags(t *testing.T) {
 	}
 
 	service.Canonicalize(task, tg, job)
-	must.True(t, service.EnableTagOverride)
-	must.Eq(t, []string{"a", "b"}, service.Tags)
-	must.Eq(t, []string{"c", "d"}, service.CanaryTags)
+	r.True(service.EnableTagOverride)
+	r.Equal([]string{"a", "b"}, service.Tags)
+	r.Equal([]string{"c", "d"}, service.CanaryTags)
 }

@@ -3,47 +3,16 @@ package testutil
 import (
 	"fmt"
 	"os"
-	"runtime"
 	"testing"
 	"time"
 
-	"github.com/google/go-cmp/cmp"
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/kr/pretty"
-	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/require"
 )
 
 type testFn func() (bool, error)
 type errorFn func(error)
-
-func Wait(t *testing.T, test testFn) {
-	t.Helper()
-	retries := 500 * TestMultiplier()
-	warn := int64(float64(retries) * 0.75)
-	for tries := retries; tries > 0; {
-		time.Sleep(10 * time.Millisecond)
-		tries--
-
-		success, err := test()
-		if success {
-			return
-		}
-
-		switch tries {
-		case 0:
-			if err == nil {
-				t.Fatalf("timeout waiting for test function to succeed (you should probably return a helpful error instead of nil!)")
-			} else {
-				t.Fatalf("timeout: %v", err)
-			}
-		case warn:
-			pc, _, _, _ := runtime.Caller(1)
-			f := runtime.FuncForPC(pc)
-			t.Logf("%d/%d retries reached for %s (err=%v)", warn, retries, f.Name(), err)
-		}
-
-	}
-}
 
 func WaitForResult(test testFn, error errorFn) {
 	WaitForResultRetries(500*TestMultiplier(), test, error)
@@ -144,12 +113,7 @@ func WaitForLeader(t testing.TB, rpc rpcFn) {
 
 // WaitForClient blocks until the client can be found
 func WaitForClient(t testing.TB, rpc rpcFn, nodeID string, region string) {
-	t.Helper()
-	WaitForClientStatus(t, rpc, nodeID, region, structs.NodeStatusReady)
-}
 
-// WaitForClientStatus blocks until the client is in the expected status.
-func WaitForClientStatus(t testing.TB, rpc rpcFn, nodeID string, region string, status string) {
 	t.Helper()
 
 	if region == "" {
@@ -169,15 +133,12 @@ func WaitForClientStatus(t testing.TB, rpc rpcFn, nodeID string, region string, 
 		if out.Node == nil {
 			return false, fmt.Errorf("node not found")
 		}
-		if out.Node.Status != status {
-			return false, fmt.Errorf("node is %s, not %s", out.Node.Status, status)
-		}
-		return true, nil
+		return out.Node.Status == structs.NodeStatusReady, nil
 	}, func(err error) {
-		t.Fatalf("failed to wait for node staus: %v", err)
+		t.Fatalf("failed to find node: %v", err)
 	})
 
-	t.Logf("[TEST] Client for test %s %s, id: %s, region: %s", t.Name(), status, nodeID, region)
+	t.Logf("[TEST] Client for test %s ready, id: %s, region: %s", t.Name(), nodeID, region)
 }
 
 // WaitForVotingMembers blocks until autopilot promotes all server peers
@@ -255,7 +216,7 @@ func WaitForRunningWithToken(t testing.TB, rpc rpcFn, job *structs.Job, token st
 
 		if len(resp.Allocations) == 0 {
 			evals := structs.JobEvaluationsResponse{}
-			must.NoError(t, rpc("Job.Evaluations", args, &evals), must.Sprintf("error looking up evals"))
+			require.NoError(t, rpc("Job.Evaluations", args, &evals), "error looking up evals")
 			return false, fmt.Errorf("0 allocations; evals: %s", pretty.Sprint(evals.Evaluations))
 		}
 
@@ -268,7 +229,7 @@ func WaitForRunningWithToken(t testing.TB, rpc rpcFn, job *structs.Job, token st
 
 		return true, nil
 	}, func(err error) {
-		must.NoError(t, err)
+		require.NoError(t, err)
 	})
 
 	return resp.Allocations
@@ -277,58 +238,6 @@ func WaitForRunningWithToken(t testing.TB, rpc rpcFn, job *structs.Job, token st
 // WaitForRunning runs a job and blocks until all allocs are out of pending.
 func WaitForRunning(t testing.TB, rpc rpcFn, job *structs.Job) []*structs.AllocListStub {
 	return WaitForRunningWithToken(t, rpc, job, "")
-}
-
-// WaitforJobAllocStatus blocks until the ClientStatus of allocations for a job
-// match the expected map of <ClientStatus>: <count>.
-func WaitForJobAllocStatus(t testing.TB, rpc rpcFn, job *structs.Job, allocStatus map[string]int) {
-	t.Helper()
-	WaitForJobAllocStatusWithToken(t, rpc, job, allocStatus, "")
-}
-
-// WaitForJobAllocStatusWithToken behaves the same way as WaitForJobAllocStatus
-// but is used for clusters with ACL enabled.
-func WaitForJobAllocStatusWithToken(t testing.TB, rpc rpcFn, job *structs.Job, allocStatus map[string]int, token string) []*structs.AllocListStub {
-	t.Helper()
-
-	var allocs []*structs.AllocListStub
-	WaitForResultRetries(2000*TestMultiplier(), func() (bool, error) {
-		args := &structs.JobSpecificRequest{
-			JobID: job.ID,
-			QueryOptions: structs.QueryOptions{
-				AuthToken: token,
-				Namespace: job.Namespace,
-				Region:    job.Region,
-			},
-		}
-
-		var resp structs.JobAllocationsResponse
-		err := rpc("Job.Allocations", args, &resp)
-		if err != nil {
-			return false, fmt.Errorf("Job.Allocations error: %v", err)
-		}
-
-		if len(resp.Allocations) == 0 {
-			evals := structs.JobEvaluationsResponse{}
-			must.NoError(t, rpc("Job.Evaluations", args, &evals), must.Sprintf("error looking up evals"))
-			return false, fmt.Errorf("0 allocations; evals: %s", pretty.Sprint(evals.Evaluations))
-		}
-
-		allocs = resp.Allocations
-
-		got := map[string]int{}
-		for _, alloc := range resp.Allocations {
-			got[alloc.ClientStatus]++
-		}
-		if diff := cmp.Diff(allocStatus, got); diff != "" {
-			return false, fmt.Errorf("alloc status mismatch (-want +got):\n%s", diff)
-		}
-		return true, nil
-	}, func(err error) {
-		must.NoError(t, err)
-	})
-
-	return allocs
 }
 
 // WaitForFiles blocks until all the files in the slice are present

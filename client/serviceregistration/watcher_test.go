@@ -12,6 +12,10 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/testutil"
 	"github.com/shoenig/test/must"
+<<<<<<< HEAD:command/agent/consul/check_watcher_test.go
+	"github.com/stretchr/testify/require"
+=======
+>>>>>>> main:client/serviceregistration/watcher_test.go
 )
 
 // restartRecord is used by a fakeWorkloadRestarter to record when restarts occur
@@ -55,11 +59,19 @@ func newFakeWorkloadRestarter(w *UniversalCheckWatcher, allocID, taskName, check
 // and is normally fulfilled by a TaskRunner.
 //
 // Restarts are recorded in the []restarts field and re-Watch the check.
+<<<<<<< HEAD:command/agent/consul/check_watcher_test.go
+// func (c *fakeCheckRestarter) Restart(source, reason string, failure bool) {
+func (c *fakeCheckRestarter) Restart(ctx context.Context, event *structs.TaskEvent, failure bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	restart := checkRestartRecord{
+=======
 func (c *fakeWorkloadRestarter) Restart(_ context.Context, event *structs.TaskEvent, failure bool) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
 	restart := restartRecord{
+>>>>>>> main:client/serviceregistration/watcher_test.go
 		timestamp: time.Now(),
 		source:    event.Type,
 		reason:    event.DisplayMessage,

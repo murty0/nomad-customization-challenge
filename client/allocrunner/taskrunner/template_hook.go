@@ -54,12 +54,6 @@ type templateHook struct {
 	templateManager *template.TaskTemplateManager
 	managerLock     sync.Mutex
 
-	// driverHandle is the task driver executor used by the template manager to
-	// run scripts when the template change mode is set to script.
-	//
-	// Must obtain a managerLock before changing. It may be nil.
-	driverHandle ti.ScriptExecutor
-
 	// consulNamespace is the current Consul namespace
 	consulNamespace string
 
@@ -68,9 +62,6 @@ type templateHook struct {
 
 	// vaultNamespace is the current Vault namespace
 	vaultNamespace string
-
-	// nomadToken is the current Nomad token
-	nomadToken string
 
 	// taskDir is the task directory
 	taskDir string
@@ -100,7 +91,6 @@ func (h *templateHook) Prestart(ctx context.Context, req *interfaces.TaskPrestar
 	// Store the current Vault token and the task directory
 	h.taskDir = req.TaskDir.Dir
 	h.vaultToken = req.VaultToken
-	h.nomadToken = req.NomadToken
 
 	// Set vault namespace if specified
 	if req.Task.Vault != nil {
@@ -130,8 +120,7 @@ func (h *templateHook) Poststart(ctx context.Context, req *interfaces.TaskPostst
 	}
 
 	if req.DriverExec != nil {
-		h.driverHandle = req.DriverExec
-		h.templateManager.SetDriverHandle(h.driverHandle)
+		h.templateManager.SetDriverHandle(req.DriverExec)
 	} else {
 		for _, tmpl := range h.config.templates {
 			if tmpl.ChangeMode == structs.TemplateChangeModeScript {
@@ -157,7 +146,6 @@ func (h *templateHook) newManager() (unblock chan struct{}, err error) {
 		EnvBuilder:           h.config.envBuilder,
 		MaxTemplateEventRate: template.DefaultMaxTemplateEventRate,
 		NomadNamespace:       h.config.nomadNamespace,
-		NomadToken:           h.nomadToken,
 	})
 	if err != nil {
 		h.logger.Error("failed to create template manager", "error", err)
@@ -165,9 +153,6 @@ func (h *templateHook) newManager() (unblock chan struct{}, err error) {
 	}
 
 	h.templateManager = m
-	if h.driverHandle != nil {
-		h.templateManager.SetDriverHandle(h.driverHandle)
-	}
 	return unblock, nil
 }
 
@@ -193,12 +178,11 @@ func (h *templateHook) Update(ctx context.Context, req *interfaces.TaskUpdateReq
 		return nil
 	}
 
-	// neither vault or nomad token has been updated, nothing to do
-	if req.VaultToken == h.vaultToken && req.NomadToken == h.nomadToken {
+	// Check if the Vault token has changed
+	if req.VaultToken == h.vaultToken {
 		return nil
 	} else {
 		h.vaultToken = req.VaultToken
-		h.nomadToken = req.NomadToken
 	}
 
 	// shutdown the old template

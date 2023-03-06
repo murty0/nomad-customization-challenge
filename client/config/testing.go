@@ -1,9 +1,7 @@
 package config
 
 import (
-	"context"
 	"io/ioutil"
-	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -41,11 +39,6 @@ func TestClientConfig(t testing.T) (*Config, func()) {
 		os.RemoveAll(parent)
 	}
 
-	// Fixup nomadtest dir permissions
-	if err = os.Chmod(parent, 0777); err != nil {
-		t.Fatalf("error updating permissions on nomadtest dir")
-	}
-
 	allocDir := filepath.Join(parent, "allocs")
 	if err := os.Mkdir(allocDir, 0777); err != nil {
 		cleanup()
@@ -76,14 +69,5 @@ func TestClientConfig(t testing.T) (*Config, func()) {
 	// Same as default; necessary for task Event messages
 	conf.MaxKillTimeout = 30 * time.Second
 
-	// Provide a stub APIListenerRegistrar implementation
-	conf.APIListenerRegistrar = NoopAPIListenerRegistrar{}
-
 	return conf, cleanup
-}
-
-type NoopAPIListenerRegistrar struct{}
-
-func (NoopAPIListenerRegistrar) Serve(_ context.Context, _ net.Listener) error {
-	return nil
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/helper/uuid"
+
 	"github.com/kr/pretty"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ func TestJob_Validate(t *testing.T) {
 		"job region",
 		"job type",
 		"namespace",
+		"priority",
 		"task groups",
 	)
 
@@ -56,8 +58,8 @@ func TestJob_Validate(t *testing.T) {
 		Namespace:   "test",
 		Name:        "my-job",
 		Type:        JobTypeService,
-		Priority:    JobDefaultPriority,
-		Datacenters: []string{"*"},
+		Priority:    50,
+		Datacenters: []string{"dc1"},
 		TaskGroups: []*TaskGroup{
 			{
 				Name: "web",
@@ -90,7 +92,7 @@ func TestJob_Validate(t *testing.T) {
 		"group 3 missing name",
 		"Task group web validation failed",
 	)
-	// test for invalid datacenters
+	// test for empty datacenters
 	j = &Job{
 		Datacenters: []string{""},
 	}
@@ -179,7 +181,7 @@ func TestJob_Warnings(t *testing.T) {
 		Expected []string
 	}{
 		{
-			Name:     "Higher counts for update block",
+			Name:     "Higher counts for update stanza",
 			Expected: []string{"max parallel count is greater"},
 			Job: &Job{
 				Type: JobTypeService,
@@ -236,7 +238,7 @@ func TestJob_Warnings(t *testing.T) {
 		},
 		{
 			Name:     "Template.VaultGrace Deprecated",
-			Expected: []string{"VaultGrace has been deprecated as of Nomad 0.11 and ignored since Vault 0.5. Please remove VaultGrace / vault_grace from template block."},
+			Expected: []string{"VaultGrace has been deprecated as of Nomad 0.11 and ignored since Vault 0.5. Please remove VaultGrace / vault_grace from template stanza."},
 			Job: &Job{
 				Type: JobTypeService,
 				TaskGroups: []*TaskGroup{
@@ -369,9 +371,9 @@ func testJob() *Job {
 		Namespace:   "test",
 		Name:        "my-job",
 		Type:        JobTypeService,
-		Priority:    JobDefaultPriority,
+		Priority:    50,
 		AllAtOnce:   false,
-		Datacenters: []string{"*"},
+		Datacenters: []string{"dc1"},
 		Constraints: []*Constraint{
 			{
 				LTarget: "$attr.kernel.name",
@@ -427,10 +429,6 @@ func testJob() *Job {
 							{
 								GetterSource: "http://foo.com",
 							},
-						},
-						Identity: &WorkloadIdentity{
-							Env:  true,
-							File: true,
 						},
 						Resources: &Resources{
 							CPU:      500,
@@ -580,7 +578,7 @@ func TestJob_SystemJob_Validate(t *testing.T) {
 	}}
 	err = j.Validate()
 	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "System jobs may not have an affinity block")
+	require.Contains(t, err.Error(), "System jobs may not have an affinity stanza")
 
 	// Add spread at job and task group level, that should fail validation
 	j.Spreads = []*Spread{{
@@ -594,7 +592,7 @@ func TestJob_SystemJob_Validate(t *testing.T) {
 
 	err = j.Validate()
 	require.NotNil(t, err)
-	require.Contains(t, err.Error(), "System jobs may not have a spread block")
+	require.Contains(t, err.Error(), "System jobs may not have a spread stanza")
 
 }
 
@@ -866,12 +864,12 @@ func TestJob_PartEqual(t *testing.T) {
 	ci.Parallel(t)
 
 	ns := &Networks{}
-	require.True(t, ns.Equal(&Networks{}))
+	require.True(t, ns.Equals(&Networks{}))
 
 	ns = &Networks{
 		&NetworkResource{Device: "eth0"},
 	}
-	require.True(t, ns.Equal(&Networks{
+	require.True(t, ns.Equals(&Networks{
 		&NetworkResource{Device: "eth0"},
 	}))
 
@@ -880,7 +878,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&NetworkResource{Device: "eth1"},
 		&NetworkResource{Device: "eth2"},
 	}
-	require.True(t, ns.Equal(&Networks{
+	require.True(t, ns.Equals(&Networks{
 		&NetworkResource{Device: "eth2"},
 		&NetworkResource{Device: "eth0"},
 		&NetworkResource{Device: "eth1"},
@@ -891,7 +889,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&Constraint{"left1", "right1", "="},
 		&Constraint{"left2", "right2", "="},
 	}
-	require.True(t, cs.Equal(&Constraints{
+	require.True(t, cs.Equals(&Constraints{
 		&Constraint{"left0", "right0", "="},
 		&Constraint{"left2", "right2", "="},
 		&Constraint{"left1", "right1", "="},
@@ -902,7 +900,7 @@ func TestJob_PartEqual(t *testing.T) {
 		&Affinity{"left1", "right1", "=", 0},
 		&Affinity{"left2", "right2", "=", 0},
 	}
-	require.True(t, as.Equal(&Affinities{
+	require.True(t, as.Equals(&Affinities{
 		&Affinity{"left0", "right0", "=", 0},
 		&Affinity{"left2", "right2", "=", 0},
 		&Affinity{"left1", "right1", "=", 0},
@@ -1279,6 +1277,9 @@ func TestTaskGroup_Validate(t *testing.T) {
 	}
 	err = tg.Validate(&Job{})
 	expected = `Check check-a invalid: refers to non-existent task task-b`
+	require.Contains(t, err.Error(), expected)
+
+	expected = `Check check-a invalid: only script and gRPC checks should have tasks`
 	require.Contains(t, err.Error(), expected)
 
 	tg = &TaskGroup{
@@ -2028,7 +2029,7 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 		Interval: 10 * time.Second,
 	}
 
-	err := invalidCheck.validateConsul()
+	err := invalidCheck.validate()
 	if err == nil || !strings.Contains(err.Error(), "Timeout cannot be less") {
 		t.Fatalf("expected a timeout validation error but received: %q", err)
 	}
@@ -2040,12 +2041,12 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 		Timeout:  2 * time.Second,
 	}
 
-	if err := check1.validateConsul(); err != nil {
+	if err := check1.validate(); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	check1.InitialStatus = "foo"
-	err = check1.validateConsul()
+	err = check1.validate()
 	if err == nil {
 		t.Fatal("Expected an error")
 	}
@@ -2055,19 +2056,19 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 	}
 
 	check1.InitialStatus = api.HealthCritical
-	err = check1.validateConsul()
+	err = check1.validate()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	check1.InitialStatus = api.HealthPassing
-	err = check1.validateConsul()
+	err = check1.validate()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	check1.InitialStatus = ""
-	err = check1.validateConsul()
+	err = check1.validate()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -2080,22 +2081,22 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 		Path:     "/foo/bar",
 	}
 
-	err = check2.validateConsul()
+	err = check2.validate()
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	check2.Path = ""
-	err = check2.validateConsul()
+	err = check2.validate()
 	if err == nil {
 		t.Fatal("Expected an error")
 	}
-	if !strings.Contains(err.Error(), "http type must have http path") {
+	if !strings.Contains(err.Error(), "valid http path") {
 		t.Fatalf("err: %v", err)
 	}
 
 	check2.Path = "http://www.example.com"
-	err = check2.validateConsul()
+	err = check2.validate()
 	if err == nil {
 		t.Fatal("Expected an error")
 	}
@@ -2111,7 +2112,7 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 				Timeout:  1 * time.Second,
 				Path:     "/health",
 				Expose:   true,
-			}).validateConsul())
+			}).validate())
 		})
 		t.Run("type tcp", func(t *testing.T) {
 			require.EqualError(t, (&ServiceCheck{
@@ -2119,7 +2120,7 @@ func TestTask_Validate_Service_Check(t *testing.T) {
 				Interval: 1 * time.Second,
 				Timeout:  1 * time.Second,
 				Expose:   true,
-			}).validateConsul(), "expose may only be set on HTTP or gRPC checks")
+			}).validate(), "expose may only be set on HTTP or gRPC checks")
 		})
 	})
 }
@@ -2403,7 +2404,7 @@ func TestTask_Validate_ConnectProxyKind(t *testing.T) {
 			Service: &Service{
 				Name: "redis",
 			},
-			ErrContains: "Connect proxy task must not have a service block",
+			ErrContains: "Connect proxy task must not have a service stanza",
 		},
 		{
 			Desc:   "Leader should not be set",
@@ -2428,7 +2429,7 @@ func TestTask_Validate_ConnectProxyKind(t *testing.T) {
 			ErrContains: `No Connect services in task group with Connect proxy ("redis")`,
 		},
 		{
-			Desc: "Connect block not configured in group",
+			Desc: "Connect stanza not configured in group",
 			Kind: "connect-proxy:redis",
 			TgService: []*Service{{
 				Name: "redis",
@@ -2487,31 +2488,31 @@ func TestLogConfig_Equals(t *testing.T) {
 	t.Run("both nil", func(t *testing.T) {
 		a := (*LogConfig)(nil)
 		b := (*LogConfig)(nil)
-		require.True(t, a.Equal(b))
+		require.True(t, a.Equals(b))
 	})
 
 	t.Run("one nil", func(t *testing.T) {
 		a := new(LogConfig)
 		b := (*LogConfig)(nil)
-		require.False(t, a.Equal(b))
+		require.False(t, a.Equals(b))
 	})
 
 	t.Run("max files", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
 		b := &LogConfig{MaxFiles: 2, MaxFileSizeMB: 200}
-		require.False(t, a.Equal(b))
+		require.False(t, a.Equals(b))
 	})
 
 	t.Run("max file size", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 100}
 		b := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
-		require.False(t, a.Equal(b))
+		require.False(t, a.Equals(b))
 	})
 
 	t.Run("same", func(t *testing.T) {
 		a := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
 		b := &LogConfig{MaxFiles: 1, MaxFileSizeMB: 200}
-		require.True(t, a.Equal(b))
+		require.True(t, a.Equals(b))
 	})
 }
 
@@ -2889,7 +2890,7 @@ func TestTaskWaitConfig_Equals(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.True(t, tc.config.Equal(tc.expected))
+			require.True(t, tc.config.Equals(tc.expected))
 		})
 	}
 }
@@ -3550,7 +3551,6 @@ func TestService_Canonicalize(t *testing.T) {
 				Name:      "redis-db",
 				Provider:  "consul",
 				Namespace: "default",
-				TaskName:  "redis",
 			},
 			name: "interpolate task in name",
 		},
@@ -3566,7 +3566,6 @@ func TestService_Canonicalize(t *testing.T) {
 				Name:      "db",
 				Provider:  "consul",
 				Namespace: "default",
-				TaskName:  "redis",
 			},
 			name: "no interpolation in name",
 		},
@@ -3582,7 +3581,6 @@ func TestService_Canonicalize(t *testing.T) {
 				Name:      "example-cache-redis-db",
 				Provider:  "consul",
 				Namespace: "default",
-				TaskName:  "redis",
 			},
 			name: "interpolate job, taskgroup and task in name",
 		},
@@ -3598,7 +3596,6 @@ func TestService_Canonicalize(t *testing.T) {
 				Name:      "example-cache-redis-db",
 				Provider:  "consul",
 				Namespace: "default",
-				TaskName:  "redis",
 			},
 			name: "interpolate base in name",
 		},
@@ -3615,7 +3612,6 @@ func TestService_Canonicalize(t *testing.T) {
 				Name:      "db",
 				Provider:  "nomad",
 				Namespace: "platform",
-				TaskName:  "redis",
 			},
 			name: "nomad provider",
 		},
@@ -4445,6 +4441,7 @@ func TestTaskArtifact_Validate_Checksum(t *testing.T) {
 		err := tc.Input.Validate()
 		if (err != nil) != tc.Err {
 			t.Fatalf("case %d: %v", i, err)
+			continue
 		}
 	}
 }
@@ -6077,6 +6074,80 @@ func TestIsRecoverable(t *testing.T) {
 	}
 }
 
+func TestACLTokenValidate(t *testing.T) {
+	ci.Parallel(t)
+
+	tk := &ACLToken{}
+
+	// Missing a type
+	err := tk.Validate()
+	assert.NotNil(t, err)
+	if !strings.Contains(err.Error(), "client or management") {
+		t.Fatalf("bad: %v", err)
+	}
+
+	// Missing policies
+	tk.Type = ACLClientToken
+	err = tk.Validate()
+	assert.NotNil(t, err)
+	if !strings.Contains(err.Error(), "missing policies") {
+		t.Fatalf("bad: %v", err)
+	}
+
+	// Invalid policies
+	tk.Type = ACLManagementToken
+	tk.Policies = []string{"foo"}
+	err = tk.Validate()
+	assert.NotNil(t, err)
+	if !strings.Contains(err.Error(), "associated with policies") {
+		t.Fatalf("bad: %v", err)
+	}
+
+	// Name too long policies
+	tk.Name = ""
+	for i := 0; i < 8; i++ {
+		tk.Name += uuid.Generate()
+	}
+	tk.Policies = nil
+	err = tk.Validate()
+	assert.NotNil(t, err)
+	if !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("bad: %v", err)
+	}
+
+	// Make it valid
+	tk.Name = "foo"
+	err = tk.Validate()
+	assert.Nil(t, err)
+}
+
+func TestACLTokenPolicySubset(t *testing.T) {
+	ci.Parallel(t)
+
+	tk := &ACLToken{
+		Type:     ACLClientToken,
+		Policies: []string{"foo", "bar", "baz"},
+	}
+
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "baz"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{}))
+	assert.Equal(t, false, tk.PolicySubset([]string{"foo", "bar", "new"}))
+	assert.Equal(t, false, tk.PolicySubset([]string{"new"}))
+
+	tk = &ACLToken{
+		Type: ACLManagementToken,
+	}
+
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "baz"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"foo", "bar", "new"}))
+	assert.Equal(t, true, tk.PolicySubset([]string{"new"}))
+}
+
 func TestACLTokenSetHash(t *testing.T) {
 	ci.Parallel(t)
 
@@ -6333,7 +6404,7 @@ func TestNetworkResourcesEquals(t *testing.T) {
 	for _, testCase := range networkResourcesTest {
 		first := testCase.input[0]
 		second := testCase.input[1]
-		require.Equal(testCase.expected, first.Equal(second), testCase.errorMsg)
+		require.Equal(testCase.expected, first.Equals(second), testCase.errorMsg)
 	}
 }
 
@@ -6539,7 +6610,7 @@ func TestSpread_Validate(t *testing.T) {
 				Attribute: "${node.datacenter}",
 				Weight:    -1,
 			},
-			err:  fmt.Errorf("Spread block must have a positive weight from 0 to 100"),
+			err:  fmt.Errorf("Spread stanza must have a positive weight from 0 to 100"),
 			name: "Invalid weight",
 		},
 		{
@@ -6547,7 +6618,7 @@ func TestSpread_Validate(t *testing.T) {
 				Attribute: "${node.datacenter}",
 				Weight:    110,
 			},
-			err:  fmt.Errorf("Spread block must have a positive weight from 0 to 100"),
+			err:  fmt.Errorf("Spread stanza must have a positive weight from 0 to 100"),
 			name: "Invalid weight",
 		},
 		{
@@ -6678,6 +6749,7 @@ func TestNodeReservedNetworkResources_ParseReserved(t *testing.T) {
 		out, err := r.ParseReservedHostPorts()
 		if (err != nil) != tc.Err {
 			t.Fatalf("test case %d: %v", i, err)
+			continue
 		}
 
 		require.Equal(out, tc.Parsed)

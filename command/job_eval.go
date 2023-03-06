@@ -110,23 +110,13 @@ func (c *JobEvalCommand) Run(args []string) int {
 	if verbose {
 		length = fullId
 	}
-
-	// Check if the job exists
-	jobIDPrefix := strings.TrimSpace(args[0])
-	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix, nil)
-	if err != nil {
-		c.Ui.Error(err.Error())
-		return 1
-	}
-
 	// Call eval endpoint
+	jobID := args[0]
+
 	opts := api.EvalOptions{
 		ForceReschedule: c.forceRescheduling,
 	}
-	w := &api.WriteOptions{
-		Namespace: namespace,
-	}
-	evalId, _, err := client.Jobs().EvaluateWithOpts(jobID, opts, w)
+	evalId, _, err := client.Jobs().EvaluateWithOpts(jobID, opts, nil)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error evaluating job: %s", err))
 		return 1

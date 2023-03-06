@@ -347,7 +347,7 @@ func (idx *NetworkIndex) SetNode(node *Node) error {
 func (idx *NetworkIndex) AddAllocs(allocs []*Allocation) (collide bool, reason string) {
 	for _, alloc := range allocs {
 		// Do not consider the resource impact of terminal allocations
-		if alloc.ClientTerminalStatus() {
+		if alloc.TerminalStatus() {
 			continue
 		}
 
@@ -497,9 +497,9 @@ func incIP(ip net.IP) {
 }
 
 // AssignPorts based on an ask from the scheduler processing a group.network
-// block. Supports multi-interfaces through node configured host_networks.
+// stanza. Supports multi-interfaces through node configured host_networks.
 //
-// AssignTaskNetwork supports the deprecated task.resources.network block.
+// AssignTaskNetwork supports the deprecated task.resources.network stanza.
 func (idx *NetworkIndex) AssignPorts(ask *NetworkResource) (AllocatedPorts, error) {
 	var offer AllocatedPorts
 

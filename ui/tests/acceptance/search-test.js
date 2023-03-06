@@ -17,9 +17,6 @@ module('Acceptance | search', function (hooks) {
     server.create('node', { name: 'xyz' });
     const otherNode = server.create('node', { name: 'ghi' });
 
-    server.create('namespace');
-    server.create('namespace', { id: 'dev' });
-
     server.create('job', {
       id: 'vwxyz',
       namespaceId: 'default',
@@ -34,13 +31,6 @@ module('Acceptance | search', function (hooks) {
       groupTaskCount: 1,
     });
     server.create('job', {
-      id: 'xyzw',
-      name: 'xyzw job',
-      namespaceId: 'dev',
-      groupsCount: 1,
-      groupTaskCount: 1,
-    });
-    server.create('job', {
       id: 'abc',
       namespaceId: 'default',
       groupsCount: 1,
@@ -49,7 +39,6 @@ module('Acceptance | search', function (hooks) {
 
     const firstAllocation = server.schema.allocations.all().models[0];
     const firstTaskGroup = server.schema.taskGroups.all().models[0];
-    const namespacedTaskGroup = server.schema.taskGroups.all().models[2];
 
     server.create('csi-plugin', { id: 'xyz-plugin', createVolumes: false });
 
@@ -61,11 +50,10 @@ module('Acceptance | search', function (hooks) {
       assert.equal(search.groups.length, 5);
 
       search.groups[0].as((jobs) => {
-        assert.equal(jobs.name, 'Jobs (3)');
-        assert.equal(jobs.options.length, 3);
+        assert.equal(jobs.name, 'Jobs (2)');
+        assert.equal(jobs.options.length, 2);
         assert.equal(jobs.options[0].text, 'default > vwxyz');
         assert.equal(jobs.options[1].text, 'default > xyz job');
-        assert.equal(jobs.options[2].text, 'dev > xyzw job');
       });
 
       search.groups[1].as((clients) => {
@@ -92,11 +80,7 @@ module('Acceptance | search', function (hooks) {
     });
 
     await Layout.navbar.search.groups[0].options[1].click();
-    assert.equal(currentURL(), '/jobs/xyz@default');
-
-    await selectSearch(Layout.navbar.search.scope, 'xy');
-    await Layout.navbar.search.groups[0].options[2].click();
-    assert.equal(currentURL(), '/jobs/xyzw@dev');
+    assert.equal(currentURL(), '/jobs/xyz');
 
     await selectSearch(Layout.navbar.search.scope, otherNode.name);
     await Layout.navbar.search.groups[1].options[0].click();
@@ -116,15 +100,7 @@ module('Acceptance | search', function (hooks) {
       `default > vwxyz > ${firstTaskGroup.name}`
     );
     await Layout.navbar.search.groups[3].options[0].click();
-    assert.equal(currentURL(), `/jobs/vwxyz@default/${firstTaskGroup.name}`);
-
-    await selectSearch(Layout.navbar.search.scope, namespacedTaskGroup.name);
-    assert.equal(
-      Layout.navbar.search.groups[3].options[0].text,
-      `dev > xyzw > ${namespacedTaskGroup.name}`
-    );
-    await Layout.navbar.search.groups[3].options[0].click();
-    assert.equal(currentURL(), `/jobs/xyzw@dev/${namespacedTaskGroup.name}`);
+    assert.equal(currentURL(), `/jobs/vwxyz/${firstTaskGroup.name}`);
 
     await selectSearch(Layout.navbar.search.scope, 'xy');
     await Layout.navbar.search.groups[4].options[0].click();

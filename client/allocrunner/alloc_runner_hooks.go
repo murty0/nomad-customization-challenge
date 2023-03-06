@@ -149,22 +149,21 @@ func (ar *allocRunner) initRunnerHooks(config *clientconfig.Config) error {
 		newCgroupHook(ar.Alloc(), ar.cpusetManager),
 		newUpstreamAllocsHook(hookLogger, ar.prevAllocWatcher),
 		newDiskMigrationHook(hookLogger, ar.prevAllocMigrator, ar.allocDir),
-		newAllocHealthWatcherHook(hookLogger, alloc, hs, ar.Listener(), ar.consulClient, ar.checkStore),
+		newAllocHealthWatcherHook(hookLogger, alloc, hs, ar.Listener(), ar.consulClient),
 		newNetworkHook(hookLogger, ns, alloc, nm, nc, ar, builtTaskEnv),
 		newGroupServiceHook(groupServiceHookConfig{
-			alloc:             alloc,
-			providerNamespace: alloc.ServiceProviderNamespace(),
-			serviceRegWrapper: ar.serviceRegWrapper,
-			restarter:         ar,
-			taskEnvBuilder:    envBuilder,
-			networkStatus:     ar,
-			logger:            hookLogger,
-			shutdownDelayCtx:  ar.shutdownDelayCtx,
+			alloc:               alloc,
+			namespace:           alloc.ServiceProviderNamespace(),
+			serviceRegWrapper:   ar.serviceRegWrapper,
+			restarter:           ar,
+			taskEnvBuilder:      envBuilder,
+			networkStatusGetter: ar,
+			logger:              hookLogger,
+			shutdownDelayCtx:    ar.shutdownDelayCtx,
 		}),
 		newConsulGRPCSocketHook(hookLogger, alloc, ar.allocDir, config.ConsulConfig, config.Node.Attributes),
 		newConsulHTTPSocketHook(hookLogger, alloc, ar.allocDir, config.ConsulConfig),
 		newCSIHook(alloc, hookLogger, ar.csiManager, ar.rpcClient, ar, hrs, ar.clientConfig.Node.SecretID),
-		newChecksHook(hookLogger, alloc, ar.checkStore, ar),
 	}
 
 	return nil
@@ -329,7 +328,6 @@ func (ar *allocRunner) destroy() error {
 func (ar *allocRunner) preKillHooks() {
 	for _, hook := range ar.runnerHooks {
 		pre, ok := hook.(interfaces.RunnerPreKillHook)
-
 		if !ok {
 			continue
 		}

@@ -29,13 +29,6 @@ const sortMap = [
 const taskPrioritySort = (a, b) =>
   sortMap[a.lifecycleName] - sortMap[b.lifecycleName];
 
-// Select the value for memory usage.
-// Must match logic in command/alloc_status.go.
-const memoryUsed = (frame) =>
-  frame.ResourceUsage.MemoryStats.RSS ||
-  frame.ResourceUsage.MemoryStats.Usage ||
-  0;
-
 @classic
 class AllocationStatsTracker extends EmberObject.extend(AbstractStatsTracker) {
   // Set via the stats computed property macro
@@ -56,11 +49,15 @@ class AllocationStatsTracker extends EmberObject.extend(AbstractStatsTracker) {
       percent: percent(cpuUsed, this.reservedCPU),
     });
 
-    const memUsed = memoryUsed(frame);
+    const memoryUsed =
+      frame.ResourceUsage.MemoryStats.Usage ||
+      frame.ResourceUsage.MemoryStats.RSS ||
+      0;
+
     this.memory.pushObject({
       timestamp,
-      used: memUsed,
-      percent: percent(memUsed / 1024 / 1024, this.reservedMemory),
+      used: memoryUsed,
+      percent: percent(memoryUsed / 1024 / 1024, this.reservedMemory),
     });
 
     let aggregateCpu = 0;
@@ -87,7 +84,11 @@ class AllocationStatsTracker extends EmberObject.extend(AbstractStatsTracker) {
         percentStack: percentCpuTotal + aggregateCpu,
       });
 
-      const taskMemoryUsed = memoryUsed(taskFrame);
+      const taskMemoryUsed =
+        taskFrame.ResourceUsage.MemoryStats.Usage ||
+        taskFrame.ResourceUsage.MemoryStats.RSS ||
+        0;
+
       const percentMemoryTotal = percent(
         taskMemoryUsed / 1024 / 1024,
         this.reservedMemory

@@ -1,19 +1,19 @@
 ---
 layout: docs
-page_title: reschedule Block - Job Specification
+page_title: reschedule Stanza - Job Specification
 description: >-
-  The "reschedule" block specifies the group's rescheduling strategy upon
+  The "reschedule" stanza specifies the group's rescheduling strategy upon
 
   allocation failures. Nomad will only attempt to reschedule failed allocations
   on
 
   to another node only after any local
-  [restarts](/nomad/docs/job-specification/restart)
+  [restarts](docs/job-specification/restart)
 
   have been exceeded.
 ---
 
-# `reschedule` Block
+# `reschedule` Stanza
 
 <Placement
   groups={[
@@ -22,15 +22,14 @@ description: >-
   ]}
 />
 
-The `reschedule` block specifies the group's rescheduling strategy. If specified at the job
+The `reschedule` stanza specifies the group's rescheduling strategy. If specified at the job
 level, the configuration will apply to all groups within the job. If the
-reschedule block is present on both the job and the group, they are merged with
-the group block taking the highest precedence and then the job.
+reschedule stanza is present on both the job and the group, they are merged with
+the group stanza taking the highest precedence and then the job.
 
-Nomad will attempt to schedule the allocation on another node if any of its
-task statuses become `failed`. The scheduler prefers to create a replacement
-allocation on a node that was not used by a previous allocation.
-
+Nomad will attempt to schedule the task on another node if any of its allocation
+statuses become "failed". It prefers to create a replacement allocation on a node
+that hasn't previously been used.
 
 ```hcl
 job "docs" {
@@ -47,7 +46,7 @@ job "docs" {
 }
 ```
 
-~> The reschedule block does not apply to `system` or `sysbatch` jobs because
+~> The reschedule stanza does not apply to `system` or `sysbatch` jobs because
 they run on every node.
 
 ## `reschedule` Parameters

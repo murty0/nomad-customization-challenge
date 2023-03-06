@@ -1,4 +1,5 @@
 //go:build ent
+// +build ent
 
 package api
 
@@ -6,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSentinelPolicies_ListUpsert(t *testing.T) {
@@ -17,9 +18,15 @@ func TestSentinelPolicies_ListUpsert(t *testing.T) {
 
 	// Listing when nothing exists returns empty
 	result, qm, err := ap.List(nil)
-	must.NoError(t, err)
-	must.Positive(t, qm.LastIndex)
-	must.SliceEmpty(t, result)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if qm.LastIndex != 1 {
+		t.Fatalf("bad index: %d", qm.LastIndex)
+	}
+	if n := len(result); n != 0 {
+		t.Fatalf("expected 0 policies, got: %d", n)
+	}
 
 	// Register a policy
 	policy := &SentinelPolicy{
@@ -30,19 +37,22 @@ func TestSentinelPolicies_ListUpsert(t *testing.T) {
 		Policy:           "main = rule { true }",
 	}
 	wm, err := ap.Upsert(policy, nil)
-	must.NoError(t, err)
+	assert.Nil(t, err)
 	assertWriteMeta(t, wm)
 
 	// Check the list again
 	result, qm, err = ap.List(nil)
-	must.NoError(t, err)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	assertQueryMeta(t, qm)
-	must.Len(t, 1, result)
+	if len(result) != 1 {
+		t.Fatalf("expected policy, got: %#v", result)
+	}
 }
 
 func TestSentinelPolicies_Delete(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s, _ := makeACLClient(t, nil, nil)
 	defer s.Stop()
 	ap := c.SentinelPolicies()
@@ -56,24 +66,27 @@ func TestSentinelPolicies_Delete(t *testing.T) {
 		Policy:           "main = rule { true } ",
 	}
 	wm, err := ap.Upsert(policy, nil)
-	must.NoError(t, err)
+	assert.Nil(t, err)
 	assertWriteMeta(t, wm)
 
 	// Delete the policy
 	wm, err = ap.Delete(policy.Name, nil)
-	must.NoError(t, err)
+	assert.Nil(t, err)
 	assertWriteMeta(t, wm)
 
 	// Check the list again
 	result, qm, err := ap.List(nil)
-	must.NoError(t, err)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	assertQueryMeta(t, qm)
-	must.SliceEmpty(t, result)
+	if len(result) != 0 {
+		t.Fatalf("unexpected policy, got: %#v", result)
+	}
 }
 
 func TestSentinelPolicies_Info(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s, _ := makeACLClient(t, nil, nil)
 	defer s.Stop()
 	ap := c.SentinelPolicies()
@@ -87,12 +100,12 @@ func TestSentinelPolicies_Info(t *testing.T) {
 		Policy:           "main = rule { true }",
 	}
 	wm, err := ap.Upsert(policy, nil)
-	must.NoError(t, err)
+	assert.Nil(t, err)
 	assertWriteMeta(t, wm)
 
 	// Query the policy
 	out, qm, err := ap.Info(policy.Name, nil)
-	must.NoError(t, err)
+	assert.Nil(t, err)
 	assertQueryMeta(t, qm)
-	must.Eq(t, policy.Name, out.Name)
+	assert.Equal(t, policy.Name, out.Name)
 }

@@ -1,18 +1,19 @@
 package api
 
 import (
-	"crypto/rand"
+	crand "crypto/rand"
 	"fmt"
 	"testing"
-
-	"github.com/shoenig/test/must"
 )
 
 func assertQueryMeta(t *testing.T, qm *QueryMeta) {
 	t.Helper()
-
-	must.NotEq(t, 0, qm.LastIndex, must.Sprint("bad index"))
-	must.True(t, qm.KnownLeader, must.Sprint("expected a known leader but gone none"))
+	if qm.LastIndex == 0 {
+		t.Fatalf("bad index: %d", qm.LastIndex)
+	}
+	if !qm.KnownLeader {
+		t.Fatalf("expected known leader, got none")
+	}
 }
 
 func assertWriteMeta(t *testing.T, wm *WriteMeta) {
@@ -127,7 +128,7 @@ func float64ToPtr(f float64) *float64 {
 // generateUUID generates a uuid useful for testing only
 func generateUUID() string {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
+	if _, err := crand.Read(buf); err != nil {
 		panic(fmt.Errorf("failed to read random bytes: %v", err))
 	}
 

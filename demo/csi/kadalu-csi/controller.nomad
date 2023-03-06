@@ -24,8 +24,8 @@ variable "gluster_volname" {
 }
 
 variable "kadalu_version" {
-  default     = "0.8.15"
-  description = "Kadalu CSI version which is tested against Nomad version mentioned in README.md"
+  default     = "0.8.6"
+  description = "Kadalu CSI version which is tested against Nomad (v1.1.4)"
 }
 
 variable "gluster_user" {
@@ -134,7 +134,7 @@ job "kadalu-csi-controller" {
         }
 
         mount {
-          # If you are not using gluster native quota comment out this block
+          # If you are not using gluster native quota comment out this stanza
           type     = "bind"
           source   = "./${NOMAD_SECRETS_DIR}/ssh-privatekey"
           target   = "/etc/secret-volume/ssh-privatekey"

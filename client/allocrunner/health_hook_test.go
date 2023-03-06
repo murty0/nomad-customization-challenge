@@ -96,8 +96,7 @@ func TestHealthHook_PrerunPostrun(t *testing.T) {
 	consul := regMock.NewServiceRegistrationHandler(logger)
 	hs := &mockHealthSetter{}
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, mock.Alloc(), hs, b.Listen(), consul, checks)
+	h := newAllocHealthWatcherHook(logger, mock.Alloc(), hs, b.Listen(), consul)
 
 	// Assert we implemented the right interfaces
 	prerunh, ok := h.(interfaces.RunnerPrerunHook)
@@ -135,8 +134,7 @@ func TestHealthHook_PrerunUpdatePostrun(t *testing.T) {
 	consul := regMock.NewServiceRegistrationHandler(logger)
 	hs := &mockHealthSetter{}
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul, checks).(*allocHealthWatcherHook)
+	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul).(*allocHealthWatcherHook)
 
 	// Prerun
 	require.NoError(h.Prerun())
@@ -175,8 +173,7 @@ func TestHealthHook_UpdatePrerunPostrun(t *testing.T) {
 	consul := regMock.NewServiceRegistrationHandler(logger)
 	hs := &mockHealthSetter{}
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul, checks).(*allocHealthWatcherHook)
+	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul).(*allocHealthWatcherHook)
 
 	// Set a DeploymentID to cause ClearHealth to be called
 	alloc.DeploymentID = uuid.Generate()
@@ -217,8 +214,7 @@ func TestHealthHook_Postrun(t *testing.T) {
 	consul := regMock.NewServiceRegistrationHandler(logger)
 	hs := &mockHealthSetter{}
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, mock.Alloc(), hs, b.Listen(), consul, checks).(*allocHealthWatcherHook)
+	h := newAllocHealthWatcherHook(logger, mock.Alloc(), hs, b.Listen(), consul).(*allocHealthWatcherHook)
 
 	// Postrun
 	require.NoError(h.Postrun())
@@ -284,8 +280,7 @@ func TestHealthHook_SetHealth_healthy(t *testing.T) {
 
 	hs := newMockHealthSetter()
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul, checks).(*allocHealthWatcherHook)
+	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul).(*allocHealthWatcherHook)
 
 	// Prerun
 	require.NoError(h.Prerun())
@@ -373,8 +368,7 @@ func TestHealthHook_SetHealth_unhealthy(t *testing.T) {
 
 	hs := newMockHealthSetter()
 
-	checks := new(mock.CheckShim)
-	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul, checks).(*allocHealthWatcherHook)
+	h := newAllocHealthWatcherHook(logger, alloc.Copy(), hs, b.Listen(), consul).(*allocHealthWatcherHook)
 
 	// Prerun
 	require.NoError(h.Prerun())
@@ -395,7 +389,7 @@ func TestHealthHook_SetHealth_unhealthy(t *testing.T) {
 func TestHealthHook_SystemNoop(t *testing.T) {
 	ci.Parallel(t)
 
-	h := newAllocHealthWatcherHook(testlog.HCLogger(t), mock.SystemAlloc(), nil, nil, nil, nil)
+	h := newAllocHealthWatcherHook(testlog.HCLogger(t), mock.SystemAlloc(), nil, nil, nil)
 
 	// Assert that it's the noop impl
 	_, ok := h.(noopAllocHealthWatcherHook)
@@ -416,7 +410,7 @@ func TestHealthHook_SystemNoop(t *testing.T) {
 func TestHealthHook_BatchNoop(t *testing.T) {
 	ci.Parallel(t)
 
-	h := newAllocHealthWatcherHook(testlog.HCLogger(t), mock.BatchAlloc(), nil, nil, nil, nil)
+	h := newAllocHealthWatcherHook(testlog.HCLogger(t), mock.BatchAlloc(), nil, nil, nil)
 
 	// Assert that it's the noop impl
 	_, ok := h.(noopAllocHealthWatcherHook)

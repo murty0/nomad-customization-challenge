@@ -15,10 +15,9 @@ import (
 	metrics "github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/api"
-	"github.com/hashicorp/nomad/ci"
 	client "github.com/hashicorp/nomad/client/config"
 	"github.com/hashicorp/nomad/client/fingerprint"
-	"github.com/hashicorp/nomad/helper"
+	"github.com/hashicorp/nomad/helper/freeport"
 	"github.com/hashicorp/nomad/helper/testlog"
 	"github.com/hashicorp/nomad/nomad"
 	"github.com/hashicorp/nomad/nomad/mock"
@@ -26,6 +25,10 @@ import (
 	sconfig "github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano()) // seed random number generator
+}
 
 // TempDir defines the base dir for temporary directories.
 var TempDir = os.TempDir()
@@ -92,15 +95,14 @@ type TestAgent struct {
 // configuration. The caller should call Shutdown() to stop the agent and
 // remove temporary directories.
 func NewTestAgent(t testing.TB, name string, configCallback func(*Config)) *TestAgent {
-	logger := testlog.HCLogger(t)
-	logger.SetLevel(testlog.HCLoggerTestLevel())
 	a := &TestAgent{
 		T:              t,
 		Name:           name,
 		ConfigCallback: configCallback,
 		Enterprise:     EnterpriseTestAgent,
-		logger:         logger,
+		logger:         testlog.HCLogger(t),
 	}
+
 	a.Start()
 	return a
 }
@@ -259,15 +261,17 @@ func (a *TestAgent) start() (*Agent, error) {
 
 // Shutdown stops the agent and removes the data directory if it is
 // managed by the test agent.
-func (a *TestAgent) Shutdown() {
-	if a == nil || a.shutdown {
-		return
+func (a *TestAgent) Shutdown() error {
+	if a.shutdown {
+		return nil
 	}
 	a.shutdown = true
 
+	defer freeport.Return(a.ports)
+
 	defer func() {
 		if a.DataDir != "" {
-			_ = os.RemoveAll(a.DataDir)
+			os.RemoveAll(a.DataDir)
 		}
 	}()
 
@@ -282,17 +286,11 @@ func (a *TestAgent) Shutdown() {
 		ch <- a.Agent.Shutdown()
 	}()
 
-	// one minute grace period on shutdown
-	timer, cancel := helper.NewSafeTimer(1 * time.Minute)
-	defer cancel()
-
 	select {
 	case err := <-ch:
-		if err != nil {
-			a.T.Fatalf("agent shutdown error: %v", err)
-		}
-	case <-timer.C:
-		a.T.Fatal("agent shutdown timeout")
+		return err
+	case <-time.After(1 * time.Minute):
+		return fmt.Errorf("timed out while shutting down test agent")
 	}
 }
 
@@ -326,7 +324,7 @@ func (a *TestAgent) Client() *api.Client {
 // Instead of relying on one set of ports to be sufficient we retry
 // starting the agent with different ports on port conflict.
 func (a *TestAgent) pickRandomPorts(c *Config) {
-	ports := ci.PortAllocator.Grab(3)
+	ports := freeport.MustTake(3)
 	a.ports = append(a.ports, ports...)
 
 	c.Ports.HTTP = ports[0]

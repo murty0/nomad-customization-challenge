@@ -5,33 +5,61 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/docker/go-units"
+	units "github.com/docker/go-units"
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
-	"github.com/shoenig/test/wait"
+	"github.com/kr/pretty"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFS_Logs(t *testing.T) {
-	testutil.RequireRoot(t)
 	testutil.Parallel(t)
+	require := require.New(t)
+	rpcPort := 0
 
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
-		c.DevMode = true
+		rpcPort = c.Ports.RPC
+		c.Client = &testutil.ClientConfig{
+			Enabled: true,
+		}
 	})
 	defer s.Stop()
 
-	node := oneNodeFromNodeList(t, c.Nodes())
-	index := node.ModifyIndex
+	//TODO There should be a way to connect the client to the servers in
+	//makeClient above
+	require.NoError(c.Agent().SetServers([]string{fmt.Sprintf("127.0.0.1:%d", rpcPort)}))
+
+	index := uint64(0)
+	testutil.WaitForResult(func() (bool, error) {
+		nodes, qm, err := c.Nodes().List(&QueryOptions{WaitIndex: index})
+		if err != nil {
+			return false, err
+		}
+		index = qm.LastIndex
+		if len(nodes) != 1 {
+			return false, fmt.Errorf("expected 1 node but found: %s", pretty.Sprint(nodes))
+		}
+		if nodes[0].Status != "ready" {
+			return false, fmt.Errorf("node not ready: %s", nodes[0].Status)
+		}
+		if _, ok := nodes[0].Drivers["mock_driver"]; !ok {
+			return false, errors.New("mock_driver not ready")
+		}
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %v", err)
+	})
 
 	var input strings.Builder
 	input.Grow(units.MB)
 	lines := 80 * units.KB
 	for i := 0; i < lines; i++ {
-		_, _ = fmt.Fprintf(&input, "%d\n", i)
+		fmt.Fprintf(&input, "%d\n", i)
 	}
 
 	job := &Job{
@@ -57,52 +85,47 @@ func TestFS_Logs(t *testing.T) {
 
 	jobs := c.Jobs()
 	jobResp, _, err := jobs.Register(job, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	index = jobResp.EvalCreateIndex
-	evaluations := c.Evaluations()
-
-	f := func() error {
-		resp, qm, err := evaluations.Info(jobResp.EvalID, &QueryOptions{WaitIndex: index})
+	evals := c.Evaluations()
+	testutil.WaitForResult(func() (bool, error) {
+		evalResp, qm, err := evals.Info(jobResp.EvalID, &QueryOptions{WaitIndex: index})
 		if err != nil {
-			return fmt.Errorf("failed to get evaluation info: %w", err)
+			return false, err
 		}
-		must.Eq(t, "", resp.BlockedEval)
+		if evalResp.BlockedEval != "" {
+			t.Fatalf("Eval blocked: %s", pretty.Sprint(evalResp))
+		}
 		index = qm.LastIndex
-		if resp.Status != "complete" {
-			return fmt.Errorf("evaluation status is not complete, got: %s", resp.Status)
+		if evalResp.Status != "complete" {
+			return false, fmt.Errorf("eval status: %v", evalResp.Status)
 		}
-		return nil
-	}
-	must.Wait(t, wait.InitialSuccess(
-		wait.ErrorFunc(f),
-		wait.Timeout(10*time.Second),
-		wait.Gap(1*time.Second),
-	))
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %v", err)
+	})
 
 	allocID := ""
-	g := func() error {
+	testutil.WaitForResult(func() (bool, error) {
 		allocs, _, err := jobs.Allocations(*job.ID, true, &QueryOptions{WaitIndex: index})
 		if err != nil {
-			return fmt.Errorf("failed to get allocations: %w", err)
+			return false, err
 		}
-		if n := len(allocs); n != 1 {
-			return fmt.Errorf("expected 1 allocation, got: %d", n)
+		if len(allocs) != 1 {
+			return false, fmt.Errorf("unexpected number of allocs: %d", len(allocs))
 		}
 		if allocs[0].ClientStatus != "complete" {
-			return fmt.Errorf("allocation not complete: %s", allocs[0].ClientStatus)
+			return false, fmt.Errorf("alloc not complete: %s", allocs[0].ClientStatus)
 		}
 		allocID = allocs[0].ID
-		return nil
-	}
-	must.Wait(t, wait.InitialSuccess(
-		wait.ErrorFunc(g),
-		wait.Timeout(10*time.Second),
-		wait.Gap(1*time.Second),
-	))
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %v", err)
+	})
 
 	alloc, _, err := c.Allocations().Info(allocID, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	for i := 0; i < 3; i++ {
 		stopCh := make(chan struct{})
@@ -121,26 +144,25 @@ func TestFS_Logs(t *testing.T) {
 				result.Write(f.Data)
 			case err := <-errors:
 				// Don't Fatal here as the other assertions may
-				// contain helpful information.
+				// contain helpeful information.
 				t.Errorf("Error: %v", err)
 			}
 		}
 
 		// Check length
-		must.Eq(t, input.Len(), result.Len())
+		assert.Equal(t, input.Len(), result.Len(), "file size mismatch")
 
 		// Check complete ordering
 		for i := 0; i < lines; i++ {
-			line, readErr := result.ReadBytes('\n')
-			must.NoError(t, readErr, must.Sprintf("unexpected error on line %d: %v", i, readErr))
-			must.Eq(t, fmt.Sprintf("%d\n", i), string(line))
+			line, err := result.ReadBytes('\n')
+			require.NoErrorf(err, "unexpected error on line %d: %v", i, err)
+			require.Equal(fmt.Sprintf("%d\n", i), string(line))
 		}
 	}
 }
 
 func TestFS_FrameReader(t *testing.T) {
 	testutil.Parallel(t)
-
 	// Create a channel of the frames and a cancel channel
 	framesCh := make(chan *StreamFrame, 3)
 	errCh := make(chan error)
@@ -175,8 +197,12 @@ func TestFS_FrameReader(t *testing.T) {
 	p := make([]byte, 12)
 
 	n, err := r.Read(p[:5])
-	must.NoError(t, err)
-	must.Eq(t, n, r.Offset())
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if off := r.Offset(); off != n {
+		t.Fatalf("unexpected read bytes: got %v; wanted %v", n, off)
+	}
 
 	off := n
 	for {
@@ -185,16 +211,24 @@ func TestFS_FrameReader(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			must.NoError(t, err)
+			t.Fatalf("Read failed: %v", err)
 		}
 		off += n
 	}
 
-	must.Eq(t, expected, p)
-	must.NoError(t, r.Close())
-	_, ok := <-cancelCh
-	must.False(t, ok)
-	must.Eq(t, len(expected), r.Offset())
+	if !reflect.DeepEqual(p, expected) {
+		t.Fatalf("read %q, wanted %q", string(p), string(expected))
+	}
+
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close() failed: %v", err)
+	}
+	if _, ok := <-cancelCh; ok {
+		t.Fatalf("Close() didn't close cancel channel")
+	}
+	if len(expected) != r.Offset() {
+		t.Fatalf("offset %d, wanted %d", r.Offset(), len(expected))
+	}
 }
 
 func TestFS_FrameReader_Unblock(t *testing.T) {
@@ -211,8 +245,13 @@ func TestFS_FrameReader_Unblock(t *testing.T) {
 	p := make([]byte, 12)
 
 	n, err := r.Read(p)
-	must.NoError(t, err)
-	must.Zero(t, n)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+
+	if n != 0 {
+		t.Fatalf("should have unblocked")
+	}
 
 	// Unset the unblock
 	r.SetUnblockTime(0)
@@ -225,7 +264,7 @@ func TestFS_FrameReader_Unblock(t *testing.T) {
 
 	select {
 	case <-resultCh:
-		must.Unreachable(t, must.Sprint("must not have unblocked"))
+		t.Fatalf("shouldn't have unblocked")
 	case <-time.After(300 * time.Millisecond):
 	}
 }
@@ -248,5 +287,7 @@ func TestFS_FrameReader_Error(t *testing.T) {
 	p := make([]byte, 12)
 
 	_, err := r.Read(p)
-	must.ErrorIs(t, err, expected)
+	if err == nil || !strings.Contains(err.Error(), expected.Error()) {
+		t.Fatalf("bad error: %v", err)
+	}
 }

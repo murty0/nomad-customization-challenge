@@ -107,7 +107,7 @@ job: {{ env "NOMAD_JOB_NAME" }}
 	_, err := tc.Consul().KV().Delete(key, nil)
 	f.NoError(err)
 
-	// Parse job so we can replace the template block with isolated keys
+	// Parse job so we can replace the template stanza with isolated keys
 	job, err := jobspec.ParseFile("consultemplate/input/templating.nomad")
 	f.NoError(err)
 	job.ID = &jobID
@@ -163,10 +163,7 @@ job: {{ env "NOMAD_JOB_NAME" }}
 		"upstream":          "running",
 		"exec_downstream":   "running",
 		"docker_downstream": "running"}
-	f.NoError(waitForAllocStatusByGroup(jobID, ns, expected, &e2eutil.WaitConfig{
-		Interval: time.Millisecond * 300,
-		Retries:  100,
-	}))
+	f.NoError(waitForAllocStatusByGroup(jobID, ns, expected, nil))
 
 	// verify we've rendered the templates
 	for allocID := range downstreams {

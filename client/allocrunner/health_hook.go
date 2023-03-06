@@ -6,38 +6,34 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	log "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/client/allochealth"
 	"github.com/hashicorp/nomad/client/allocrunner/interfaces"
 	"github.com/hashicorp/nomad/client/serviceregistration"
-	"github.com/hashicorp/nomad/client/serviceregistration/checks/checkstore"
 	cstructs "github.com/hashicorp/nomad/client/structs"
 	"github.com/hashicorp/nomad/nomad/structs"
 )
 
-// healthSetter is able to set/clear alloc health.
+// healthMutator is able to set/clear alloc health.
 type healthSetter interface {
 	// HasHealth returns true if health is already set.
 	HasHealth() bool
 
-	// SetHealth via the mutator.
+	// Set health via the mutator
 	SetHealth(healthy, isDeploy bool, taskEvents map[string]*structs.TaskEvent)
 
-	// ClearHealth for when the deployment ID changes.
+	// Clear health when the deployment ID changes
 	ClearHealth()
 }
 
 // allocHealthWatcherHook is responsible for watching an allocation's task
 // status and (optionally) Consul health check status to determine if the
-// allocation is healthy or unhealthy. Used by deployments and migrations.
+// allocation is health or unhealthy. Used by deployments and migrations.
 type allocHealthWatcherHook struct {
 	healthSetter healthSetter
 
-	// consul client used to monitor Consul service health checks
+	// consul client used to monitor health checks
 	consul serviceregistration.Handler
-
-	// checkStore is used to monitor Nomad service health checks
-	checkStore checkstore.Shim
 
 	// listener is given to trackers to listen for alloc updates and closed
 	// when the alloc is destroyed.
@@ -68,11 +64,11 @@ type allocHealthWatcherHook struct {
 	// hold hookLock to access.
 	isDeploy bool
 
-	logger hclog.Logger
+	logger log.Logger
 }
 
-func newAllocHealthWatcherHook(logger hclog.Logger, alloc *structs.Allocation, hs healthSetter,
-	listener *cstructs.AllocListener, consul serviceregistration.Handler, checkStore checkstore.Shim) interfaces.RunnerHook {
+func newAllocHealthWatcherHook(logger log.Logger, alloc *structs.Allocation, hs healthSetter,
+	listener *cstructs.AllocListener, consul serviceregistration.Handler) interfaces.RunnerHook {
 
 	// Neither deployments nor migrations care about the health of
 	// non-service jobs so never watch their health
@@ -89,7 +85,6 @@ func newAllocHealthWatcherHook(logger hclog.Logger, alloc *structs.Allocation, h
 		cancelFn:     func() {}, // initialize to prevent nil func panics
 		watchDone:    closedDone,
 		consul:       consul,
-		checkStore:   checkStore,
 		healthSetter: hs,
 		listener:     listener,
 	}
@@ -137,9 +132,8 @@ func (h *allocHealthWatcherHook) init() error {
 
 	h.logger.Trace("watching", "deadline", deadline, "checks", useChecks, "min_healthy_time", minHealthyTime)
 	// Create a new tracker, start it, and watch for health results.
-	tracker := allochealth.NewTracker(
-		ctx, h.logger, h.alloc, h.listener, h.consul, h.checkStore, minHealthyTime, useChecks,
-	)
+	tracker := allochealth.NewTracker(ctx, h.logger, h.alloc,
+		h.listener, h.consul, minHealthyTime, useChecks)
 	tracker.Start()
 
 	// Create a new done chan and start watching for health updates
@@ -200,7 +194,7 @@ func (h *allocHealthWatcherHook) Postrun() error {
 
 func (h *allocHealthWatcherHook) Shutdown() {
 	// Same as Postrun
-	_ = h.Postrun()
+	h.Postrun()
 }
 
 // watchHealth watches alloc health until it is set, the alloc is stopped, the

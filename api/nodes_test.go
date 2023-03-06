@@ -3,81 +3,81 @@ package api
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
-	"github.com/shoenig/test/wait"
+	"github.com/stretchr/testify/require"
 )
-
-func queryNodeList(t *testing.T, nodes *Nodes) ([]*NodeListStub, *QueryMeta) {
-	t.Helper()
-	var (
-		nodeListStub []*NodeListStub
-		queryMeta    *QueryMeta
-		err          error
-	)
-
-	f := func() error {
-		nodeListStub, queryMeta, err = nodes.List(nil)
-		if err != nil {
-			return fmt.Errorf("failed to list nodes: %w", err)
-		}
-		if len(nodeListStub) == 0 {
-			return fmt.Errorf("no nodes yet")
-		}
-		return nil
-	}
-
-	must.Wait(t, wait.InitialSuccess(
-		wait.ErrorFunc(f),
-		wait.Timeout(10*time.Second),
-		wait.Gap(1*time.Second),
-	))
-
-	return nodeListStub, queryMeta
-}
-
-func oneNodeFromNodeList(t *testing.T, nodes *Nodes) *NodeListStub {
-	nodeListStub, _ := queryNodeList(t, nodes)
-	must.Len(t, 1, nodeListStub, must.Sprint("expected 1 node"))
-	return nodeListStub[0]
-}
 
 func TestNodes_List(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
 	defer s.Stop()
 	nodes := c.Nodes()
 
-	nodeListStub, queryMeta := queryNodeList(t, nodes)
-	must.Len(t, 1, nodeListStub)
+	var qm *QueryMeta
+	var out []*NodeListStub
+	var err error
+
+	testutil.WaitForResult(func() (bool, error) {
+		out, qm, err = nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Check that we got valid QueryMeta.
-	assertQueryMeta(t, queryMeta)
+	assertQueryMeta(t, qm)
 }
 
 func TestNodes_PrefixList(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
 	defer s.Stop()
 	nodes := c.Nodes()
 
+	var qm *QueryMeta
+	var out []*NodeListStub
+	var err error
+
 	// Get the node ID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Find node based on four character prefix
-	out, qm, err := nodes.PrefixList(nodeID[:4])
-	must.NoError(t, err)
-	must.Len(t, 1, out, must.Sprint("expected only 1 node"))
+	out, qm, err = nodes.PrefixList(nodeID[:4])
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if n := len(out); n != 1 {
+		t.Fatalf("expected 1 node, got: %d ", n)
+	}
 
 	// Check that we got valid QueryMeta.
 	assertQueryMeta(t, qm)
@@ -87,32 +87,43 @@ func TestNodes_PrefixList(t *testing.T) {
 // reserved resources in the response.
 func TestNodes_List_Resources(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
 	defer s.Stop()
 	nodes := c.Nodes()
 
-	node := oneNodeFromNodeList(t, nodes)
+	var out []*NodeListStub
+	var err error
+
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err = nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// By default resources should *not* be included
-	must.Nil(t, node.NodeResources)
-	must.Nil(t, node.ReservedResources)
+	require.Nil(t, out[0].NodeResources)
+	require.Nil(t, out[0].ReservedResources)
 
 	qo := &QueryOptions{
 		Params: map[string]string{"resources": "true"},
 	}
-
-	out, _, err := nodes.List(qo)
-	must.NoError(t, err)
-	must.NotNil(t, out[0].NodeResources)
-	must.NotNil(t, out[0].ReservedResources)
+	out, _, err = nodes.List(qo)
+	require.NoError(t, err)
+	require.NotNil(t, out[0].NodeResources)
+	require.NotNil(t, out[0].ReservedResources)
 }
 
 func TestNodes_Info(t *testing.T) {
 	testutil.Parallel(t)
-
 	startTime := time.Now().Unix()
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
@@ -121,36 +132,57 @@ func TestNodes_Info(t *testing.T) {
 	nodes := c.Nodes()
 
 	// Retrieving a nonexistent node returns error
-	_, _, infoErr := nodes.Info("12345678-abcd-efab-cdef-123456789abc", nil)
-	must.ErrorContains(t, infoErr, "not found")
+	_, _, err := nodes.Info("12345678-abcd-efab-cdef-123456789abc", nil)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got: %#v", err)
+	}
 
-	// Get the node ID and DC
-	node := oneNodeFromNodeList(t, nodes)
-	nodeID, dc := node.ID, node.Datacenter
+	// Get the node ID
+	var nodeID, dc string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		dc = out[0].Datacenter
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Querying for existing nodes returns properly
 	result, qm, err := nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	assertQueryMeta(t, qm)
 
 	// Check that the result is what we expect
-	must.Eq(t, nodeID, result.ID)
-	must.Eq(t, dc, result.Datacenter)
+	if result.ID != nodeID || result.Datacenter != dc {
+		t.Fatalf("expected %s (%s), got: %s (%s)",
+			nodeID, dc,
+			result.ID, result.Datacenter)
+	}
 
-	must.Eq(t, 20000, result.NodeResources.MinDynamicPort)
-	must.Eq(t, 32000, result.NodeResources.MaxDynamicPort)
+	require.Equal(t, 20000, result.NodeResources.MinDynamicPort)
+	require.Equal(t, 32000, result.NodeResources.MaxDynamicPort)
 
 	// Check that the StatusUpdatedAt field is being populated correctly
-	must.Less(t, result.StatusUpdatedAt, startTime)
+	if result.StatusUpdatedAt < startTime {
+		t.Fatalf("start time: %v, status updated: %v", startTime, result.StatusUpdatedAt)
+	}
 
-	// check we have at least one event
-	must.GreaterEq(t, 1, len(result.Events))
+	if len(result.Events) < 1 {
+		t.Fatalf("Expected at minimum the node register event to be populated: %+v", result)
+	}
 }
 
 func TestNodes_NoSecretID(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
@@ -158,21 +190,34 @@ func TestNodes_NoSecretID(t *testing.T) {
 	nodes := c.Nodes()
 
 	// Get the node ID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// perform a raw http call and make sure that:
 	// - "ID" to make sure that raw decoding is working correctly
 	// - "SecretID" to make sure it's not present
 	resp := make(map[string]interface{})
 	_, err := c.query("/v1/node/"+nodeID, &resp, nil)
-	must.NoError(t, err)
-	must.Eq(t, nodeID, resp["ID"].(string))
-	must.Eq(t, "", resp["SecretID"])
+	require.NoError(t, err)
+	require.Equal(t, nodeID, resp["ID"])
+	require.Empty(t, resp["SecretID"])
 }
 
 func TestNodes_ToggleDrain(t *testing.T) {
 	testutil.Parallel(t)
-
+	require := require.New(t)
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
@@ -180,13 +225,26 @@ func TestNodes_ToggleDrain(t *testing.T) {
 	nodes := c.Nodes()
 
 	// Wait for node registration and get the ID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Check for drain mode
 	out, _, err := nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-	must.False(t, out.Drain)
-	must.Nil(t, out.LastDrain)
+	require.Nil(err)
+	require.False(out.Drain)
+	require.Nil(out.LastDrain)
 
 	// Toggle it on
 	timeBeforeDrain := time.Now().Add(-1 * time.Second)
@@ -201,7 +259,7 @@ func TestNodes_ToggleDrain(t *testing.T) {
 		MarkEligible: false,
 		Meta:         drainMeta,
 	}, nil)
-	must.NoError(t, err)
+	require.Nil(err)
 	assertWriteMeta(t, &drainOut.WriteMeta)
 
 	// Drain may have completed before we can check, use event stream
@@ -211,98 +269,127 @@ func TestNodes_ToggleDrain(t *testing.T) {
 	streamCh, err := c.EventStream().Stream(ctx, map[Topic][]string{
 		TopicNode: {nodeID},
 	}, 0, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	// we expect to see the node change to Drain:true and then back to Drain:false+ineligible
 	var sawDraining, sawDrainComplete uint64
 	for sawDrainComplete == 0 {
 		select {
 		case events := <-streamCh:
-			must.NoError(t, events.Err)
+			require.NoError(events.Err)
 			for _, e := range events.Events {
 				node, err := e.Node()
-				must.NoError(t, err)
-				must.Eq(t, node.DrainStrategy != nil, node.Drain)
-				must.True(t, !node.Drain || node.SchedulingEligibility == NodeSchedulingIneligible) // node.Drain => "ineligible"
+				require.NoError(err)
+				require.Equal(node.DrainStrategy != nil, node.Drain)
+				require.True(!node.Drain || node.SchedulingEligibility == NodeSchedulingIneligible) // node.Drain => "ineligible"
 				if node.Drain && node.SchedulingEligibility == NodeSchedulingIneligible {
-					must.NotNil(t, node.LastDrain)
-					must.Eq(t, DrainStatusDraining, node.LastDrain.Status)
+					require.NotNil(node.LastDrain)
+					require.Equal(DrainStatusDraining, node.LastDrain.Status)
 					now := time.Now()
-					must.False(t, node.LastDrain.StartedAt.Before(timeBeforeDrain))
-					must.False(t, node.LastDrain.StartedAt.After(now))
-					must.Eq(t, drainMeta, node.LastDrain.Meta)
+					require.False(node.LastDrain.StartedAt.Before(timeBeforeDrain),
+						"wanted %v <= %v", node.LastDrain.StartedAt, timeBeforeDrain)
+					require.False(node.LastDrain.StartedAt.After(now),
+						"wanted %v <= %v", node.LastDrain.StartedAt, now)
+					require.Equal(drainMeta, node.LastDrain.Meta)
 					sawDraining = node.ModifyIndex
 				} else if sawDraining != 0 && !node.Drain && node.SchedulingEligibility == NodeSchedulingIneligible {
-					must.NotNil(t, node.LastDrain)
-					must.Eq(t, DrainStatusComplete, node.LastDrain.Status)
-					must.True(t, !node.LastDrain.UpdatedAt.Before(node.LastDrain.StartedAt))
-					must.Eq(t, drainMeta, node.LastDrain.Meta)
+					require.NotNil(node.LastDrain)
+					require.Equal(DrainStatusComplete, node.LastDrain.Status)
+					require.True(!node.LastDrain.UpdatedAt.Before(node.LastDrain.StartedAt))
+					require.Equal(drainMeta, node.LastDrain.Meta)
 					sawDrainComplete = node.ModifyIndex
 				}
 			}
 		case <-time.After(5 * time.Second):
-			must.Unreachable(t, must.Sprint("waiting on stream event that never happened"))
+			require.Fail("failed waiting for event stream event")
 		}
 	}
 
 	// Toggle off again
 	drainOut, err = nodes.UpdateDrain(nodeID, nil, true, nil)
-	must.NoError(t, err)
+	require.Nil(err)
 	assertWriteMeta(t, &drainOut.WriteMeta)
 
 	// Check again
 	out, _, err = nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-	must.False(t, out.Drain)
-	must.Nil(t, out.DrainStrategy)
-	must.Eq(t, NodeSchedulingEligible, out.SchedulingEligibility)
+	require.Nil(err)
+	require.False(out.Drain)
+	require.Nil(out.DrainStrategy)
+	require.Equal(NodeSchedulingEligible, out.SchedulingEligibility)
 }
 
 func TestNodes_ToggleEligibility(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
 	defer s.Stop()
 	nodes := c.Nodes()
 
-	// Get node ID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	// Wait for node registration and get the ID
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Check for eligibility
 	out, _, err := nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-	must.Eq(t, NodeSchedulingEligible, out.SchedulingEligibility)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if out.SchedulingEligibility != NodeSchedulingEligible {
+		t.Fatalf("node should be eligible")
+	}
 
 	// Toggle it off
 	eligOut, err := nodes.ToggleEligibility(nodeID, false, nil)
-	must.NoError(t, err)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	assertWriteMeta(t, &eligOut.WriteMeta)
 
 	// Check again
 	out, _, err = nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-	must.Eq(t, NodeSchedulingIneligible, out.SchedulingEligibility)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if out.SchedulingEligibility != NodeSchedulingIneligible {
+		t.Fatalf("bad eligibility: %v vs %v", out.SchedulingEligibility, NodeSchedulingIneligible)
+	}
 
 	// Toggle on
 	eligOut, err = nodes.ToggleEligibility(nodeID, true, nil)
-	must.NoError(t, err)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 	assertWriteMeta(t, &eligOut.WriteMeta)
 
 	// Check again
 	out, _, err = nodes.Info(nodeID, nil)
-	must.NoError(t, err)
-	must.Eq(t, NodeSchedulingEligible, out.SchedulingEligibility)
-	must.Nil(t, out.DrainStrategy)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if out.SchedulingEligibility != NodeSchedulingEligible {
+		t.Fatalf("bad eligibility: %v vs %v", out.SchedulingEligibility, NodeSchedulingEligible)
+	}
+	if out.DrainStrategy != nil {
+		t.Fatalf("drain strategy should be unset")
+	}
 }
 
 func TestNodes_Allocations(t *testing.T) {
 	testutil.Parallel(t)
-
-	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
-		c.DevMode = true
-	})
+	c, s := makeClient(t, nil, nil)
 	defer s.Stop()
 	nodes := c.Nodes()
 
@@ -310,14 +397,17 @@ func TestNodes_Allocations(t *testing.T) {
 	// don't check the index here because it's possible the node
 	// has already registered, in which case we will get a non-
 	// zero result anyways.
-	allocations, _, err := nodes.Allocations("nope", nil)
-	must.NoError(t, err)
-	must.Len(t, 0, allocations)
+	allocs, _, err := nodes.Allocations("nope", nil)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if n := len(allocs); n != 0 {
+		t.Fatalf("expected 0 allocs, got: %d", n)
+	}
 }
 
 func TestNodes_ForceEvaluate(t *testing.T) {
 	testutil.Parallel(t)
-
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
@@ -326,21 +416,37 @@ func TestNodes_ForceEvaluate(t *testing.T) {
 
 	// Force-eval on a nonexistent node fails
 	_, _, err := nodes.ForceEvaluate("12345678-abcd-efab-cdef-123456789abc", nil)
-	must.ErrorContains(t, err, "not found")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got: %#v", err)
+	}
 
 	// Wait for node registration and get the ID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := nodes.List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Try force-eval again. We don't check the WriteMeta because
 	// there are no allocations to process, so we would get an index
 	// of zero. Same goes for the eval ID.
 	_, _, err = nodes.ForceEvaluate(nodeID, nil)
-	must.NoError(t, err)
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
 }
 
 func TestNodes_Sort(t *testing.T) {
 	testutil.Parallel(t)
-
 	nodes := []*NodeListStub{
 		{CreateIndex: 2},
 		{CreateIndex: 1},
@@ -353,12 +459,15 @@ func TestNodes_Sort(t *testing.T) {
 		{CreateIndex: 2},
 		{CreateIndex: 1},
 	}
-	must.Eq(t, expect, nodes)
+	if !reflect.DeepEqual(nodes, expect) {
+		t.Fatalf("\n\n%#v\n\n%#v", nodes, expect)
+	}
 }
 
 // Unittest monitorDrainMultiplex when an error occurs
 func TestNodes_MonitorDrain_Multiplex_Bad(t *testing.T) {
 	testutil.Parallel(t)
+	require := require.New(t)
 
 	ctx := context.Background()
 	multiplexCtx, cancel := context.WithCancel(ctx)
@@ -379,36 +488,38 @@ func TestNodes_MonitorDrain_Multiplex_Bad(t *testing.T) {
 	// Fake an alloc update
 	msg := Messagef(0, "alloc update")
 	allocCh <- msg
-	must.Eq(t, msg, <-outCh)
+	require.Equal(msg, <-outCh)
 
 	// Fake a node update
 	msg = Messagef(0, "node update")
 	nodeCh <- msg
-	must.Eq(t, msg, <-outCh)
+	require.Equal(msg, <-outCh)
 
 	// Fake an error that should shut everything down
 	msg = Messagef(MonitorMsgLevelError, "fake error")
 	nodeCh <- msg
-	must.Eq(t, msg, <-outCh)
+	require.Equal(msg, <-outCh)
 
 	_, ok := <-exitedCh
-	must.False(t, ok)
+	require.False(ok)
 
 	_, ok = <-outCh
-	must.False(t, ok)
+	require.False(ok)
 
 	// Exiting should also cancel the context that would be passed to the
 	// node & alloc watchers
 	select {
 	case <-multiplexCtx.Done():
 	case <-time.After(100 * time.Millisecond):
-		must.Unreachable(t, must.Sprint("multiplex context was not cancelled"))
+		t.Fatalf("context wasn't canceled")
 	}
+
 }
 
 // Unittest monitorDrainMultiplex when drain finishes
 func TestNodes_MonitorDrain_Multiplex_Good(t *testing.T) {
 	testutil.Parallel(t)
+	require := require.New(t)
 
 	ctx := context.Background()
 	multiplexCtx, cancel := context.WithCancel(ctx)
@@ -430,17 +541,19 @@ func TestNodes_MonitorDrain_Multiplex_Good(t *testing.T) {
 	msg := Messagef(MonitorMsgLevelInfo, "node update")
 	nodeCh <- msg
 	close(nodeCh)
-	must.Eq(t, msg, <-outCh)
+	require.Equal(msg, <-outCh)
 
 	// Nothing else should have exited yet
 	select {
-	case badMsg, ok := <-outCh:
-		must.False(t, ok, must.Sprintf("unexpected output %v", badMsg))
-		must.Unreachable(t, must.Sprint("out channel closed unexpectedly"))
+	case msg, ok := <-outCh:
+		if ok {
+			t.Fatalf("unexpected output: %q", msg)
+		}
+		t.Fatalf("out channel closed unexpectedly")
 	case <-exitedCh:
-		must.Unreachable(t, must.Sprint("multiplexer exited unexpectedly"))
+		t.Fatalf("multiplexer exited unexpectedly")
 	case <-multiplexCtx.Done():
-		must.Unreachable(t, must.Sprint("multiplexer context canceled unexpectedly"))
+		t.Fatalf("multiplexer context canceled unexpectedly")
 	case <-time.After(10 * time.Millisecond):
 		t.Logf("multiplexer still running as expected")
 	}
@@ -448,87 +561,103 @@ func TestNodes_MonitorDrain_Multiplex_Good(t *testing.T) {
 	// Fake an alloc update coming in after the node monitor has finished
 	msg = Messagef(0, "alloc update")
 	allocCh <- msg
-	must.Eq(t, msg, <-outCh)
+	require.Equal(msg, <-outCh)
 
 	// Closing the allocCh should cause everything to exit
 	close(allocCh)
 
 	_, ok := <-exitedCh
-	must.False(t, ok)
+	require.False(ok)
 
 	_, ok = <-outCh
-	must.False(t, ok)
+	require.False(ok)
 
 	// Exiting should also cancel the context that would be passed to the
 	// node & alloc watchers
 	select {
 	case <-multiplexCtx.Done():
 	case <-time.After(100 * time.Millisecond):
-		must.Unreachable(t, must.Sprint("context was not cancelled"))
+		t.Fatalf("context wasn't canceled")
 	}
+
 }
 
 func TestNodes_DrainStrategy_Equal(t *testing.T) {
 	testutil.Parallel(t)
+	require := require.New(t)
 
 	// nil
 	var d *DrainStrategy
-	must.Equal(t, nil, d)
+	require.True(d.Equal(nil))
 
 	o := &DrainStrategy{}
-	must.NotEqual(t, d, o)
-	must.NotEqual(t, o, d)
+	require.False(d.Equal(o))
+	require.False(o.Equal(d))
 
 	d = &DrainStrategy{}
-	must.Equal(t, d, o)
-	must.Equal(t, o, d)
+	require.True(d.Equal(o))
 
 	// ForceDeadline
 	d.ForceDeadline = time.Now()
-	must.NotEqual(t, d, o)
+	require.False(d.Equal(o))
 
 	o.ForceDeadline = d.ForceDeadline
-	must.Equal(t, d, o)
+	require.True(d.Equal(o))
 
 	// Deadline
 	d.Deadline = 1
-	must.NotEqual(t, d, o)
+	require.False(d.Equal(o))
 
 	o.Deadline = 1
-	must.Equal(t, d, o)
+	require.True(d.Equal(o))
 
 	// IgnoreSystemJobs
 	d.IgnoreSystemJobs = true
-	must.NotEqual(t, d, o)
+	require.False(d.Equal(o))
 
 	o.IgnoreSystemJobs = true
-	must.Equal(t, d, o)
+	require.True(d.Equal(o))
 }
 
 func TestNodes_Purge(t *testing.T) {
 	testutil.Parallel(t)
-
+	require := require.New(t)
 	c, s := makeClient(t, nil, func(c *testutil.TestServerConfig) {
 		c.DevMode = true
 	})
 	defer s.Stop()
-	nodes := c.Nodes()
 
 	// Purge on a nonexistent node fails.
 	_, _, err := c.Nodes().Purge("12345678-abcd-efab-cdef-123456789abc", nil)
-	must.ErrorContains(t, err, "not found")
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got: %#v", err)
+	}
 
-	// Wait for nodeID
-	nodeID := oneNodeFromNodeList(t, nodes).ID
+	// Wait for node registration and get the ID so we can attempt to purge a
+	// node that exists.
+	var nodeID string
+	testutil.WaitForResult(func() (bool, error) {
+		out, _, err := c.Nodes().List(nil)
+		if err != nil {
+			return false, err
+		}
+		if n := len(out); n != 1 {
+			return false, fmt.Errorf("expected 1 node, got: %d", n)
+		}
+		nodeID = out[0].ID
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 
 	// Perform the node purge and check the response objects.
 	out, meta, err := c.Nodes().Purge(nodeID, nil)
-	must.NoError(t, err)
-	must.NotNil(t, out)
+	require.Nil(err)
+	require.NotNil(out)
 
 	// We can't use assertQueryMeta here, as the RPC response does not populate
 	// the known leader field.
-	must.Positive(t, meta.LastIndex)
+	require.Greater(meta.LastIndex, uint64(0))
 }
 
 func TestNodeStatValueFormatting(t *testing.T) {
@@ -611,7 +740,7 @@ func TestNodeStatValueFormatting(t *testing.T) {
 	for i, c := range cases {
 		t.Run(fmt.Sprintf("case %d %v", i, c.expected), func(t *testing.T) {
 			formatted := c.value.String()
-			must.Eq(t, c.expected, formatted)
+			require.Equal(t, c.expected, formatted)
 		})
 	}
 }

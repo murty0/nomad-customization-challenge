@@ -29,7 +29,6 @@ import (
 	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/nomad/structs/config"
 	"github.com/hashicorp/nomad/testutil"
-	"github.com/shoenig/test/must"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -477,37 +476,29 @@ func TestParseWait_InvalidIndex(t *testing.T) {
 func TestParseConsistency(t *testing.T) {
 	ci.Parallel(t)
 	var b structs.QueryOptions
-	var resp *httptest.ResponseRecorder
 
-	testCases := [2]string{"/v1/catalog/nodes?stale", "/v1/catalog/nodes?stale=true"}
-	for _, urlPath := range testCases {
-		req, err := http.NewRequest("GET", urlPath, nil)
-		must.NoError(t, err)
-		resp = httptest.NewRecorder()
-		parseConsistency(resp, req, &b)
-		must.True(t, b.AllowStale)
+	req, err := http.NewRequest("GET",
+		"/v1/catalog/nodes?stale", nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
 	}
 
-	req, err := http.NewRequest("GET", "/v1/catalog/nodes?stale=false", nil)
-	must.NoError(t, err)
-	resp = httptest.NewRecorder()
-	parseConsistency(resp, req, &b)
-	must.False(t, b.AllowStale)
-
-	req, err = http.NewRequest("GET", "/v1/catalog/nodes?stale=random", nil)
-	must.NoError(t, err)
-	resp = httptest.NewRecorder()
-	parseConsistency(resp, req, &b)
-	must.False(t, b.AllowStale)
-	must.EqOp(t, 400, resp.Code)
+	parseConsistency(req, &b)
+	if !b.AllowStale {
+		t.Fatalf("Bad: %v", b)
+	}
 
 	b = structs.QueryOptions{}
-	req, err = http.NewRequest("GET", "/v1/catalog/nodes?consistent", nil)
-	must.NoError(t, err)
+	req, err = http.NewRequest("GET",
+		"/v1/catalog/nodes?consistent", nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
 
-	resp = httptest.NewRecorder()
-	parseConsistency(resp, req, &b)
-	must.False(t, b.AllowStale)
+	parseConsistency(req, &b)
+	if b.AllowStale {
+		t.Fatalf("Bad: %v", b)
+	}
 }
 
 func TestParseRegion(t *testing.T) {
@@ -743,7 +734,6 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 			CertFile:          foocert,
 			KeyFile:           fookey,
 		}
-		c.LogLevel = "off"
 	})
 	defer s.Shutdown()
 
@@ -759,9 +749,7 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a *url.Error but received: %T -> %v", err, err)
 	}
-
-	cveErr := (urlErr.Err.(*tls.CertificateVerificationError)).Err
-	hostErr, ok := cveErr.(x509.HostnameError)
+	hostErr, ok := urlErr.Err.(x509.HostnameError)
 	if !ok {
 		t.Fatalf("expected a x509.HostnameError but received: %T -> %v", urlErr.Err, urlErr.Err)
 	}
@@ -789,9 +777,7 @@ func TestHTTP_VerifyHTTPSClient(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected a *url.Error but received: %T -> %v", err, err)
 	}
-
-	cveErr = (urlErr.Err.(*tls.CertificateVerificationError)).Err
-	_, ok = cveErr.(x509.UnknownAuthorityError)
+	_, ok = urlErr.Err.(x509.UnknownAuthorityError)
 	if !ok {
 		t.Fatalf("expected a x509.UnknownAuthorityError but received: %T -> %v", urlErr.Err, urlErr.Err)
 	}
@@ -1267,7 +1253,6 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 
 		// Create a new connection that will go over the connection limit.
 		limitConn, err := dial(t, addr, useTLS)
-		require.NoError(t, err)
 
 		response := "HTTP/1.1 429"
 		buf := make([]byte, len(response))
@@ -1316,7 +1301,9 @@ func TestHTTPServer_Limits_OK(t *testing.T) {
 				c.Limits.HTTPMaxConnsPerClient = tc.limit
 				c.LogLevel = "ERROR"
 			})
-			defer s.Shutdown()
+			defer func() {
+				require.NoError(t, s.Shutdown())
+			}()
 
 			assertTimeout(t, s, tc.assertTimeout, tc.timeout)
 

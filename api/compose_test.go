@@ -1,10 +1,10 @@
 package api
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
 )
 
 func TestCompose(t *testing.T) {
@@ -140,5 +140,7 @@ func TestCompose(t *testing.T) {
 			},
 		},
 	}
-	must.Eq(t, expect, job)
+	if !reflect.DeepEqual(job, expect) {
+		t.Fatalf("expect: %#v, got: %#v", expect, job)
+	}
 }

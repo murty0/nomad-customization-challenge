@@ -37,16 +37,6 @@ func (s *HTTPServer) jobListRequest(resp http.ResponseWriter, req *http.Request)
 		return nil, nil
 	}
 
-	args.Fields = &structs.JobStubFields{}
-	// Parse meta query param
-	jobMeta, err := parseBool(req, "meta")
-	if err != nil {
-		return nil, err
-	}
-	if jobMeta != nil {
-		args.Fields.Meta = *jobMeta
-	}
-
 	var out structs.JobListResponse
 	if err := s.agent.RPC("Job.List", &args, &out); err != nil {
 		return nil, err
@@ -195,6 +185,7 @@ func (s *HTTPServer) ValidateJobRequest(resp http.ResponseWriter, req *http.Requ
 	}
 
 	job := ApiJobToStructJob(validateRequest.Job)
+
 	args := structs.JobValidateRequest{
 		Job: job,
 		WriteRequest: structs.WriteRequest{
@@ -403,7 +394,7 @@ func (s *HTTPServer) jobUpdate(resp http.ResponseWriter, req *http.Request,
 	if args.Job.Type != nil && *args.Job.Type == api.JobTypeSystem {
 		for _, tg := range args.Job.TaskGroups {
 			if tg.Scaling != nil {
-				return nil, CodedError(400, "Task groups with job type system do not support scaling blocks")
+				return nil, CodedError(400, "Task groups with job type system do not support scaling stanzas")
 			}
 		}
 	}
@@ -818,7 +809,7 @@ func (s *HTTPServer) apiJobAndRequestToStructs(job *api.Job, req *http.Request, 
 
 	queryRegion := req.URL.Query().Get("region")
 	requestRegion, jobRegion := regionForJob(
-		job, queryRegion, writeReq.Region, s.agent.GetConfig().Region,
+		job, queryRegion, writeReq.Region, s.agent.config.Region,
 	)
 
 	sJob := ApiJobToStructJob(job)
@@ -1150,13 +1141,6 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 	structsTask.Affinities = ApiAffinitiesToStructs(apiTask.Affinities)
 	structsTask.CSIPluginConfig = ApiCSIPluginConfigToStructsCSIPluginConfig(apiTask.CSIPluginConfig)
 
-	if apiTask.Identity != nil {
-		structsTask.Identity = &structs.WorkloadIdentity{
-			Env:  apiTask.Identity.Env,
-			File: apiTask.Identity.File,
-		}
-	}
-
 	if apiTask.RestartPolicy != nil {
 		structsTask.RestartPolicy = &structs.RestartPolicy{
 			Attempts: *apiTask.RestartPolicy.Attempts,
@@ -1228,22 +1212,21 @@ func ApiTaskToStructsTask(job *structs.Job, group *structs.TaskGroup,
 		for _, template := range apiTask.Templates {
 			structsTask.Templates = append(structsTask.Templates,
 				&structs.Template{
-					SourcePath:    *template.SourcePath,
-					DestPath:      *template.DestPath,
-					EmbeddedTmpl:  *template.EmbeddedTmpl,
-					ChangeMode:    *template.ChangeMode,
-					ChangeSignal:  *template.ChangeSignal,
-					ChangeScript:  apiChangeScriptToStructsChangeScript(template.ChangeScript),
-					Splay:         *template.Splay,
-					Perms:         *template.Perms,
-					Uid:           template.Uid,
-					Gid:           template.Gid,
-					LeftDelim:     *template.LeftDelim,
-					RightDelim:    *template.RightDelim,
-					Envvars:       *template.Envvars,
-					VaultGrace:    *template.VaultGrace,
-					Wait:          apiWaitConfigToStructsWaitConfig(template.Wait),
-					ErrMissingKey: *template.ErrMissingKey,
+					SourcePath:   *template.SourcePath,
+					DestPath:     *template.DestPath,
+					EmbeddedTmpl: *template.EmbeddedTmpl,
+					ChangeMode:   *template.ChangeMode,
+					ChangeSignal: *template.ChangeSignal,
+					ChangeScript: apiChangeScriptToStructsChangeScript(template.ChangeScript),
+					Splay:        *template.Splay,
+					Perms:        *template.Perms,
+					Uid:          template.Uid,
+					Gid:          template.Gid,
+					LeftDelim:    *template.LeftDelim,
+					RightDelim:   *template.RightDelim,
+					Envvars:      *template.Envvars,
+					VaultGrace:   *template.VaultGrace,
+					Wait:         apiWaitConfigToStructsWaitConfig(template.Wait),
 				})
 		}
 	}
@@ -1412,7 +1395,6 @@ func ApiServicesToStructs(in []*api.Service, group bool) []*structs.Service {
 			Address:           s.Address,
 			Meta:              maps.Clone(s.Meta),
 			CanaryMeta:        maps.Clone(s.CanaryMeta),
-			TaggedAddresses:   maps.Clone(s.TaggedAddresses),
 			OnUpdate:          s.OnUpdate,
 			Provider:          s.Provider,
 		}
@@ -1652,18 +1634,11 @@ func apiConnectSidecarServiceProxyToStructs(in *api.ConsulProxy) *structs.Consul
 	if in == nil {
 		return nil
 	}
-
-	// TODO: to maintain backwards compatibility
-	expose := in.Expose
-	if in.ExposeConfig != nil {
-		expose = in.ExposeConfig
-	}
-
 	return &structs.ConsulProxy{
 		LocalServiceAddress: in.LocalServiceAddress,
 		LocalServicePort:    in.LocalServicePort,
 		Upstreams:           apiUpstreamsToStructs(in.Upstreams),
-		Expose:              apiConsulExposeConfigToStructs(expose),
+		Expose:              apiConsulExposeConfigToStructs(in.ExposeConfig),
 		Config:              maps.Clone(in.Config),
 	}
 }
@@ -1681,33 +1656,26 @@ func apiUpstreamsToStructs(in []*api.ConsulUpstream) []structs.ConsulUpstream {
 			Datacenter:           upstream.Datacenter,
 			LocalBindAddress:     upstream.LocalBindAddress,
 			MeshGateway:          apiMeshGatewayToStructs(upstream.MeshGateway),
-			Config:               maps.Clone(upstream.Config),
 		}
 	}
 	return upstreams
 }
 
-func apiMeshGatewayToStructs(in *api.ConsulMeshGateway) structs.ConsulMeshGateway {
-	var gw structs.ConsulMeshGateway
-	if in != nil {
-		gw.Mode = in.Mode
+func apiMeshGatewayToStructs(in *api.ConsulMeshGateway) *structs.ConsulMeshGateway {
+	if in == nil {
+		return nil
 	}
-	return gw
+	return &structs.ConsulMeshGateway{
+		Mode: in.Mode,
+	}
 }
 
 func apiConsulExposeConfigToStructs(in *api.ConsulExposeConfig) *structs.ConsulExposeConfig {
 	if in == nil {
 		return nil
 	}
-
-	// TODO: to maintain backwards compatibility
-	paths := in.Paths
-	if in.Path != nil {
-		paths = in.Path
-	}
-
 	return &structs.ConsulExposeConfig{
-		Paths: apiConsulExposePathsToStructs(paths),
+		Paths: apiConsulExposePathsToStructs(in.Path),
 	}
 }
 

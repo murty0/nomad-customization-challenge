@@ -157,7 +157,11 @@ job "example" {
       }
     }
 
+<<<<<<< HEAD:command/assets/example.nomad
+    # The "service" stanza instructs Nomad to register this task as a service
+=======
     # The "service" block instructs Nomad to register this task as a service
+>>>>>>> main:command/asset/example.nomad.hcl
     # in the service discovery engine, which is currently Nomad or Consul. This
     # will make the service discoverable after Nomad has placed it on a host and
     # port.

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-msgpack/codec"
-
 	"github.com/hashicorp/nomad/helper/pointer"
 	"github.com/hashicorp/nomad/nomad/stream"
 	"github.com/hashicorp/nomad/nomad/structs"
@@ -15,10 +14,6 @@ import (
 
 type Event struct {
 	srv *Server
-}
-
-func NewEventEndpoint(srv *Server) *Event {
-	return &Event{srv: srv}
 }
 
 func (e *Event) register() {
@@ -37,8 +32,6 @@ func (e *Event) stream(conn io.ReadWriteCloser) {
 		return
 	}
 
-	authErr := e.srv.Authenticate(nil, &args)
-
 	// forward to appropriate region
 	if args.Region != e.srv.config.Region {
 		err := e.forwardStreamingRPC(args.Region, "Event.Stream", args, conn)
@@ -46,11 +39,6 @@ func (e *Event) stream(conn io.ReadWriteCloser) {
 			handleJsonResultError(err, pointer.Of(int64(500)), encoder)
 		}
 		return
-	}
-
-	e.srv.MeasureRPCRate("event", structs.RateMetricRead, &args)
-	if authErr != nil {
-		handleJsonResultError(structs.ErrPermissionDenied, pointer.Of(int64(403)), encoder)
 	}
 
 	// Generate the subscription request
@@ -71,13 +59,9 @@ func (e *Event) stream(conn io.ReadWriteCloser) {
 	// start subscription to publisher
 	var subscription *stream.Subscription
 	var subErr error
-
-	// Track whether the ACL token being used has an expiry time.
-	var expiryTime *time.Time
-
 	// Check required ACL permissions for requested Topics
 	if e.srv.config.ACLEnabled {
-		subscription, expiryTime, subErr = publisher.SubscribeWithACLCheck(subReq)
+		subscription, subErr = publisher.SubscribeWithACLCheck(subReq)
 	} else {
 		subscription, subErr = publisher.Subscribe(subReq)
 	}
@@ -104,16 +88,6 @@ func (e *Event) stream(conn io.ReadWriteCloser) {
 			if err != nil {
 				select {
 				case errCh <- err:
-				case <-ctx.Done():
-				}
-				return
-			}
-
-			// Ensure the token being used is not expired before we any events
-			// to subscribers.
-			if expiryTime != nil && expiryTime.Before(time.Now().UTC()) {
-				select {
-				case errCh <- structs.ErrTokenExpired:
 				case <-ctx.Done():
 				}
 				return

@@ -18,6 +18,7 @@ import (
 	"github.com/hashicorp/nomad/ci"
 	"github.com/hashicorp/nomad/client/allocdir"
 	"github.com/hashicorp/nomad/client/testutil"
+	"github.com/hashicorp/nomad/helper/freeport"
 	"github.com/hashicorp/nomad/helper/uuid"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	dtestutil "github.com/hashicorp/nomad/plugins/drivers/testutils"
@@ -30,8 +31,8 @@ func TestDockerDriver_User(t *testing.T) {
 	ci.Parallel(t)
 	testutil.DockerCompatible(t)
 
-	task, cfg, _ := dockerTask(t)
-
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
 	task.User = "alice"
 	cfg.Command = "/bin/sleep"
 	cfg.Args = []string{"10000"}
@@ -147,8 +148,8 @@ func TestDockerDriver_CPUCFSPeriod(t *testing.T) {
 	ci.Parallel(t)
 	testutil.DockerCompatible(t)
 
-	task, cfg, _ := dockerTask(t)
-
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
 	cfg.CPUHardLimit = true
 	cfg.CPUCFSPeriod = 1000000
 	require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
@@ -168,8 +169,8 @@ func TestDockerDriver_Sysctl_Ulimit(t *testing.T) {
 	ci.Parallel(t)
 	testutil.DockerCompatible(t)
 
-	task, cfg, _ := dockerTask(t)
-
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
 	expectedUlimits := map[string]string{
 		"nproc":  "4242",
 		"nofile": "2048:4096",
@@ -239,18 +240,19 @@ func TestDockerDriver_Sysctl_Ulimit_Errors(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		task, cfg, _ := dockerTask(t)
+		task, cfg, ports := dockerTask(t)
 		cfg.Ulimit = tc.ulimitConfig
 		require.NoError(t, task.EncodeConcreteDriverConfig(cfg))
 
 		d := dockerDriverHarness(t, nil)
 		cleanup := d.MkAllocDir(task, true)
-		t.Cleanup(cleanup)
+		defer cleanup()
 		copyImage(t, task.TaskDir(), "busybox.tar")
 
 		_, _, err := d.StartTask(task)
 		require.NotNil(t, err, "Expected non nil error")
 		require.Contains(t, err.Error(), tc.err.Error())
+		freeport.Return(ports)
 	}
 }
 
@@ -337,7 +339,8 @@ func TestDockerDriver_BindMountsHonorVolumesEnabledFlag(t *testing.T) {
 
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				task, cfg, _ := dockerTask(t)
+				task, cfg, ports := dockerTask(t)
+				defer freeport.Return(ports)
 				cfg.VolumeDriver = c.volumeDriver
 				cfg.Volumes = c.volumes
 
@@ -363,7 +366,8 @@ func TestDockerDriver_BindMountsHonorVolumesEnabledFlag(t *testing.T) {
 
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				task, cfg, _ := dockerTask(t)
+				task, cfg, ports := dockerTask(t)
+				defer freeport.Return(ports)
 				cfg.VolumeDriver = c.volumeDriver
 				cfg.Volumes = c.volumes
 
@@ -511,7 +515,8 @@ func TestDockerDriver_MountsSerialization(t *testing.T) {
 
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				task, cfg, _ := dockerTask(t)
+				task, cfg, ports := dockerTask(t)
+				defer freeport.Return(ports)
 				cfg.Mounts = c.passedMounts
 
 				task.AllocDir = allocDir
@@ -533,8 +538,8 @@ func TestDockerDriver_MountsSerialization(t *testing.T) {
 
 		for _, c := range cases {
 			t.Run(c.name, func(t *testing.T) {
-				task, cfg, _ := dockerTask(t)
-
+				task, cfg, ports := dockerTask(t)
+				defer freeport.Return(ports)
 				cfg.Mounts = c.passedMounts
 
 				task.AllocDir = allocDir
@@ -562,7 +567,8 @@ func TestDockerDriver_CreateContainerConfig_MountsCombined(t *testing.T) {
 	ci.Parallel(t)
 	testutil.DockerCompatible(t)
 
-	task, cfg, _ := dockerTask(t)
+	task, cfg, ports := dockerTask(t)
+	defer freeport.Return(ports)
 
 	task.Devices = []*drivers.DeviceConfig{
 		{

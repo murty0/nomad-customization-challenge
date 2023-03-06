@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +19,7 @@ import (
 func Register(jobID, jobFilePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	return execCmd(jobID, jobFilePath, exec.CommandContext(ctx, "nomad", "job", "run", "-detach", "-"))
+	return register(jobID, jobFilePath, exec.CommandContext(ctx, "nomad", "job", "run", "-detach", "-"))
 }
 
 // RegisterWithArgs registers a jobspec from a file but with a unique ID. The
@@ -29,22 +28,17 @@ func Register(jobID, jobFilePath string) error {
 func RegisterWithArgs(jobID, jobFilePath string, args ...string) error {
 
 	baseArgs := []string{"job", "run", "-detach"}
-	baseArgs = append(baseArgs, args...)
+	for i := range args {
+		baseArgs = append(baseArgs, args[i])
+	}
 	baseArgs = append(baseArgs, "-")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
-	return execCmd(jobID, jobFilePath, exec.CommandContext(ctx, "nomad", baseArgs...))
+
+	return register(jobID, jobFilePath, exec.CommandContext(ctx, "nomad", baseArgs...))
 }
 
-// Revert reverts the job to the given version.
-func Revert(jobID, jobFilePath string, version int) error {
-	args := []string{"job", "revert", "-detach", jobID, strconv.Itoa(version)}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	return execCmd(jobID, jobFilePath, exec.CommandContext(ctx, "nomad", args...))
-}
-
-func execCmd(jobID, jobFilePath string, cmd *exec.Cmd) error {
+func register(jobID, jobFilePath string, cmd *exec.Cmd) error {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return fmt.Errorf("could not open stdin?: %w", err)
@@ -55,16 +49,14 @@ func execCmd(jobID, jobFilePath string, cmd *exec.Cmd) error {
 		return fmt.Errorf("could not open job file: %w", err)
 	}
 
-	// hack off the job block to replace with our unique ID
+	// hack off the first line to replace with our unique ID
 	var re = regexp.MustCompile(`(?m)^job ".*" \{`)
 	jobspec := re.ReplaceAllString(string(content),
 		fmt.Sprintf("job \"%s\" {", jobID))
 
 	go func() {
-		defer func() {
-			_ = stdin.Close()
-		}()
-		_, _ = io.WriteString(stdin, jobspec)
+		defer stdin.Close()
+		io.WriteString(stdin, jobspec)
 	}()
 
 	out, err := cmd.CombinedOutput()
@@ -222,7 +214,9 @@ func StopJob(jobID string, args ...string) error {
 	// Build our argument list in the correct order, ensuring the jobID is last
 	// and the Nomad subcommand are first.
 	baseArgs := []string{"job", "stop"}
-	baseArgs = append(baseArgs, args...)
+	for i := range args {
+		baseArgs = append(baseArgs, args[i])
+	}
 	baseArgs = append(baseArgs, jobID)
 
 	// Execute the command. We do not care about the stdout, only stderr.

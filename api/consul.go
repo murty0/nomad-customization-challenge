@@ -2,8 +2,6 @@ package api
 
 import (
 	"time"
-
-	"golang.org/x/exp/maps"
 )
 
 // Consul represents configuration related to consul.
@@ -40,7 +38,7 @@ func (c *Consul) MergeNamespace(namespace *string) {
 	}
 }
 
-// ConsulConnect represents a Consul Connect jobspec block.
+// ConsulConnect represents a Consul Connect jobspec stanza.
 type ConsulConnect struct {
 	Native         bool                  `hcl:"native,optional"`
 	Gateway        *ConsulGateway        `hcl:"gateway,block"`
@@ -59,7 +57,7 @@ func (cc *ConsulConnect) Canonicalize() {
 }
 
 // ConsulSidecarService represents a Consul Connect SidecarService jobspec
-// block.
+// stanza.
 type ConsulSidecarService struct {
 	Tags                   []string     `hcl:"tags,optional"`
 	Port                   string       `hcl:"port,optional"`
@@ -133,12 +131,11 @@ func (st *SidecarTask) Canonicalize() {
 	}
 }
 
-// ConsulProxy represents a Consul Connect sidecar proxy jobspec block.
+// ConsulProxy represents a Consul Connect sidecar proxy jobspec stanza.
 type ConsulProxy struct {
 	LocalServiceAddress string                 `mapstructure:"local_service_address" hcl:"local_service_address,optional"`
 	LocalServicePort    int                    `mapstructure:"local_service_port" hcl:"local_service_port,optional"`
-	Expose              *ConsulExposeConfig    `mapstructure:"expose" hcl:"expose,block"`
-	ExposeConfig        *ConsulExposeConfig    // Deprecated: only to maintain backwards compatibility. Use Expose instead.
+	ExposeConfig        *ConsulExposeConfig    `mapstructure:"expose" hcl:"expose,block"`
 	Upstreams           []*ConsulUpstream      `hcl:"upstreams,block"`
 	Config              map[string]interface{} `hcl:"config,block"`
 }
@@ -148,7 +145,7 @@ func (cp *ConsulProxy) Canonicalize() {
 		return
 	}
 
-	cp.Expose.Canonicalize()
+	cp.ExposeConfig.Canonicalize()
 
 	if len(cp.Upstreams) == 0 {
 		cp.Upstreams = nil
@@ -198,7 +195,7 @@ func (c *ConsulMeshGateway) Copy() *ConsulMeshGateway {
 	}
 }
 
-// ConsulUpstream represents a Consul Connect upstream jobspec block.
+// ConsulUpstream represents a Consul Connect upstream jobspec stanza.
 type ConsulUpstream struct {
 	DestinationName      string             `mapstructure:"destination_name" hcl:"destination_name,optional"`
 	DestinationNamespace string             `mapstructure:"destination_namespace" hcl:"destination_namespace,optional"`
@@ -206,7 +203,6 @@ type ConsulUpstream struct {
 	Datacenter           string             `mapstructure:"datacenter" hcl:"datacenter,optional"`
 	LocalBindAddress     string             `mapstructure:"local_bind_address" hcl:"local_bind_address,optional"`
 	MeshGateway          *ConsulMeshGateway `mapstructure:"mesh_gateway" hcl:"mesh_gateway,block"`
-	Config               map[string]any     `mapstructure:"config" hcl:"config,block"`
 }
 
 func (cu *ConsulUpstream) Copy() *ConsulUpstream {
@@ -220,7 +216,6 @@ func (cu *ConsulUpstream) Copy() *ConsulUpstream {
 		Datacenter:           cu.Datacenter,
 		LocalBindAddress:     cu.LocalBindAddress,
 		MeshGateway:          cu.MeshGateway.Copy(),
-		Config:               maps.Clone(cu.Config),
 	}
 }
 
@@ -229,23 +224,15 @@ func (cu *ConsulUpstream) Canonicalize() {
 		return
 	}
 	cu.MeshGateway.Canonicalize()
-	if len(cu.Config) == 0 {
-		cu.Config = nil
-	}
 }
 
 type ConsulExposeConfig struct {
-	Paths []*ConsulExposePath `mapstructure:"path" hcl:"path,block"`
-	Path  []*ConsulExposePath // Deprecated: only to maintain backwards compatibility. Use Paths instead.
+	Path []*ConsulExposePath `mapstructure:"path" hcl:"path,block"`
 }
 
 func (cec *ConsulExposeConfig) Canonicalize() {
 	if cec == nil {
 		return
-	}
-
-	if len(cec.Paths) == 0 {
-		cec.Paths = nil
 	}
 
 	if len(cec.Path) == 0 {

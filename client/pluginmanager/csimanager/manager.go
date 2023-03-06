@@ -149,7 +149,7 @@ func (c *csiManager) resyncPluginsFromRegistry(ptype string) {
 
 // handlePluginEvent syncs a single event against the plugin registry
 func (c *csiManager) handlePluginEvent(event *dynamicplugins.PluginUpdateEvent) {
-	if event == nil || event.Info == nil {
+	if event == nil {
 		return
 	}
 	c.logger.Trace("dynamic plugin event",

@@ -91,7 +91,7 @@ message TaskConfigSchemaRequest {}
 
 message TaskConfigSchemaResponse {
 
-    // Spec is the configuration schema for the job driver config block
+    // Spec is the configuration schema for the job driver config stanza
     hashicorp.nomad.plugins.shared.hclspec.Spec spec = 1;
 }
 

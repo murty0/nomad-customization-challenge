@@ -4,11 +4,12 @@ import (
 	"testing"
 
 	"github.com/hashicorp/nomad/api/internal/testutil"
-	"github.com/shoenig/test/must"
+	"github.com/stretchr/testify/require"
 )
 
 func TestScalingPolicies_ListPolicies(t *testing.T) {
 	testutil.Parallel(t)
+	require := require.New(t)
 
 	c, s := makeClient(t, nil, nil)
 	defer s.Stop()
@@ -17,8 +18,8 @@ func TestScalingPolicies_ListPolicies(t *testing.T) {
 
 	// Check that we don't have any scaling policies before registering a job that has one
 	policies, _, err := scaling.ListPolicies(nil)
-	must.NoError(t, err)
-	must.SliceEmpty(t, policies)
+	require.NoError(err)
+	require.Empty(policies, "expected 0 scaling policies, got: %d", len(policies))
 
 	// Register a job with a scaling policy
 	job := testJob()
@@ -26,12 +27,14 @@ func TestScalingPolicies_ListPolicies(t *testing.T) {
 		Max: pointerOf(int64(100)),
 	}
 	_, _, err = jobs.Register(job, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	// Check that we have a scaling policy now
 	policies, _, err = scaling.ListPolicies(nil)
-	must.NoError(t, err)
-	must.Len(t, 1, policies)
+	require.NoError(err)
+	if len(policies) != 1 {
+		t.Fatalf("expected 1 scaling policy, got: %d", len(policies))
+	}
 
 	policy := policies[0]
 
@@ -40,20 +43,21 @@ func TestScalingPolicies_ListPolicies(t *testing.T) {
 	if job.Namespace != nil && *job.Namespace != "" {
 		namespace = *job.Namespace
 	}
-	must.Eq(t, policy.Target["Namespace"], namespace)
+	require.Equal(policy.Target["Namespace"], namespace)
 
 	// Check that the scaling policy references the right job
-	must.Eq(t, policy.Target["Job"], *job.ID)
+	require.Equal(policy.Target["Job"], *job.ID)
 
 	// Check that the scaling policy references the right group
-	must.Eq(t, policy.Target["Group"], *job.TaskGroups[0].Name)
+	require.Equal(policy.Target["Group"], *job.TaskGroups[0].Name)
 
 	// Check that the scaling policy has the right type
-	must.Eq(t, ScalingPolicyTypeHorizontal, policy.Type)
+	require.Equal(ScalingPolicyTypeHorizontal, policy.Type)
 }
 
 func TestScalingPolicies_GetPolicy(t *testing.T) {
 	testutil.Parallel(t)
+	require := require.New(t)
 
 	c, s := makeClient(t, nil, nil)
 	defer s.Stop()
@@ -62,11 +66,13 @@ func TestScalingPolicies_GetPolicy(t *testing.T) {
 
 	// Empty ID should return 404
 	_, _, err := scaling.GetPolicy("", nil)
-	must.ErrorContains(t, err, "404")
+	require.Error(err)
+	require.Containsf(err.Error(), "404", "expected 404 error, got: %s", err.Error())
 
-	// Non-existent ID should return 404
-	_, _, err = scaling.GetPolicy("i-do-not-exist", nil)
-	must.ErrorContains(t, err, "404")
+	// Inexistent ID should return 404
+	_, _, err = scaling.GetPolicy("i-dont-exist", nil)
+	require.Error(err)
+	require.Containsf(err.Error(), "404", "expected 404 error, got: %s", err.Error())
 
 	// Register a job with a scaling policy
 	job := testJob()
@@ -80,12 +86,12 @@ func TestScalingPolicies_GetPolicy(t *testing.T) {
 	}
 	job.TaskGroups[0].Scaling = policy
 	_, _, err = jobs.Register(job, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	// Find newly created scaling policy ID
 	var policyID string
 	policies, _, err := scaling.ListPolicies(nil)
-	must.NoError(t, err)
+	require.NoError(err)
 	for _, p := range policies {
 		if p.Target["Job"] == *job.ID {
 			policyID = p.ID
@@ -98,7 +104,7 @@ func TestScalingPolicies_GetPolicy(t *testing.T) {
 
 	// Fetch scaling policy
 	resp, _, err := scaling.GetPolicy(policyID, nil)
-	must.NoError(t, err)
+	require.NoError(err)
 
 	// Check that the scaling policy fields match
 	namespace := DefaultNamespace
@@ -110,10 +116,10 @@ func TestScalingPolicies_GetPolicy(t *testing.T) {
 		"Job":       *job.ID,
 		"Group":     *job.TaskGroups[0].Name,
 	}
-	must.Eq(t, expectedTarget, resp.Target)
-	must.Eq(t, policy.Policy, resp.Policy)
-	must.Eq(t, policy.Enabled, resp.Enabled)
-	must.Eq(t, *policy.Min, *resp.Min)
-	must.Eq(t, policy.Max, resp.Max)
-	must.Eq(t, ScalingPolicyTypeHorizontal, resp.Type)
+	require.Equal(expectedTarget, resp.Target)
+	require.Equal(policy.Policy, resp.Policy)
+	require.Equal(policy.Enabled, resp.Enabled)
+	require.Equal(*policy.Min, *resp.Min)
+	require.Equal(policy.Max, resp.Max)
+	require.Equal(ScalingPolicyTypeHorizontal, resp.Type)
 }

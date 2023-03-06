@@ -612,7 +612,7 @@ func (w *deploymentWatcher) handleAllocUpdate(allocs []*structs.AllocListStub) (
 			continue
 		}
 
-		// Determine if the update block for this group is progress based
+		// Determine if the update stanza for this group is progress based
 		progressBased := dstate.ProgressDeadline != 0
 
 		// Check if the allocation has failed and we need to mark it for allow
@@ -840,12 +840,10 @@ func (w *deploymentWatcher) getEval() *structs.Evaluation {
 	// on the previous version that are then "watched" on a leader that's on
 	// the new version. This would result in an eval with its priority set to
 	// zero which would be bad. This therefore protects against that.
-	w.l.Lock()
 	priority := w.d.EvalPriority
 	if priority == 0 {
 		priority = w.j.Priority
 	}
-	w.l.Unlock()
 
 	return &structs.Evaluation{
 		ID:           uuid.Generate(),

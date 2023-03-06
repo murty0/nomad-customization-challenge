@@ -80,7 +80,7 @@ func (j *JobScaleCommand) Run(args []string) int {
 		return 1
 	}
 
-	var countString, groupString string
+	var jobString, countString, groupString string
 	args = flags.Args()
 
 	// It is possible to specify either 2 or 3 arguments. Check and assign the
@@ -94,6 +94,7 @@ func (j *JobScaleCommand) Run(args []string) int {
 	} else {
 		countString = args[1]
 	}
+	jobString = args[0]
 
 	// Convert the count string arg to an int as required by the API.
 	count, err := strconv.Atoi(countString)
@@ -109,18 +110,9 @@ func (j *JobScaleCommand) Run(args []string) int {
 		return 1
 	}
 
-	// Check if the job exists
-	jobIDPrefix := strings.TrimSpace(args[0])
-	jobID, namespace, err := j.JobIDByPrefix(client, jobIDPrefix, nil)
-	if err != nil {
-		j.Ui.Error(err.Error())
-		return 1
-	}
-
 	// Detail the job so we can perform addition checks before submitting the
 	// scaling request.
-	q := &api.QueryOptions{Namespace: namespace}
-	job, _, err := client.Jobs().ScaleStatus(jobID, q)
+	job, _, err := client.Jobs().ScaleStatus(jobString, nil)
 	if err != nil {
 		j.Ui.Error(fmt.Sprintf("Error querying job: %v", err))
 		return 1
@@ -135,8 +127,7 @@ func (j *JobScaleCommand) Run(args []string) int {
 	msg := "submitted using the Nomad CLI"
 
 	// Perform the scaling action.
-	w := &api.WriteOptions{Namespace: namespace}
-	resp, _, err := client.Jobs().Scale(jobID, groupString, &count, msg, false, nil, w)
+	resp, _, err := client.Jobs().Scale(jobString, groupString, &count, msg, false, nil, nil)
 	if err != nil {
 		j.Ui.Error(fmt.Sprintf("Error submitting scaling request: %s", err))
 		return 1

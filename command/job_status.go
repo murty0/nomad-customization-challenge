@@ -128,7 +128,7 @@ func (c *JobStatusCommand) Run(args []string) int {
 
 	// Invoke list mode if no job ID.
 	if len(args) == 0 {
-		jobs, _, err := client.Jobs().ListOptions(nil, nil)
+		jobs, _, err := client.Jobs().List(nil)
 
 		if err != nil {
 			c.Ui.Error(fmt.Sprintf("Error querying jobs: %s", err))
@@ -145,16 +145,27 @@ func (c *JobStatusCommand) Run(args []string) int {
 	}
 
 	// Try querying the job
-	jobIDPrefix := strings.TrimSpace(args[0])
-	jobID, namespace, err := c.JobIDByPrefix(client, jobIDPrefix, nil)
+	jobID := strings.TrimSpace(args[0])
+
+	jobs, _, err := client.Jobs().PrefixList(jobID)
 	if err != nil {
-		c.Ui.Error(err.Error())
+		c.Ui.Error(fmt.Sprintf("Error querying job: %s", err))
 		return 1
+	}
+	if len(jobs) == 0 {
+		c.Ui.Error(fmt.Sprintf("No job(s) with prefix or id %q found", jobID))
+		return 1
+	}
+	if len(jobs) > 1 {
+		if (jobID != jobs[0].ID) || (allNamespaces && jobs[0].ID == jobs[1].ID) {
+			c.Ui.Error(fmt.Sprintf("Prefix matched multiple jobs\n\n%s", createStatusListOutput(jobs, allNamespaces)))
+			return 1
+		}
 	}
 
 	// Prefix lookup matched a single job
-	q := &api.QueryOptions{Namespace: namespace}
-	job, _, err := client.Jobs().Info(jobID, q)
+	q := &api.QueryOptions{Namespace: jobs[0].JobSummary.Namespace}
+	job, _, err := client.Jobs().Info(jobs[0].ID, q)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf("Error querying job: %s", err))
 		return 1
